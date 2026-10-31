@@ -1,0 +1,12 @@
+*.cache/
+*.runs/
+*.sim/
+*.hw/
+*.ip_user_files/
+*.gen/
+.Xil/
+*.jou
+*.log
+*.str
+__pycache__/
+out_vision.txt
