@@ -1,0 +1,27 @@
+# --- Python & ML Environment ---
+venv/
+env/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# --- Vivado & FPGA Hardware ---
+*.sim/
+*.wdb
+*.jou
+*.log
+*.str
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+
+# --- OS & IDE Files ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
