@@ -18,6 +18,11 @@ __pycache__/
 *.cache/
 *.hw/
 *.ip_user_files/
+*.runs
+*.xpr
+dfx_runtime.txt
+*.dcp
+utils_1/
 
 # --- OS & IDE Files ---
 .DS_Store
