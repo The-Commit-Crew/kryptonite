@@ -33,9 +33,9 @@ module tinyml_core #(
     output reg done = 0,
     output wire busy
 );
-    reg [15:0] hidden_weights [0 : (INPUT_NODES * HIDDEN_NODES) - 1];
+    reg signed [15:0] hidden_weights [0 : (INPUT_NODES * HIDDEN_NODES) - 1];
     reg [15:0] hidden_biases  [0 : HIDDEN_NODES - 1];
-    reg [15:0] output_weights [0 : (HIDDEN_NODES * OUTPUT_NODES) - 1];
+    reg signed [15:0] output_weights [0 : (HIDDEN_NODES * OUTPUT_NODES) - 1];
     reg [15:0] output_biases  [0 : OUTPUT_NODES - 1];
     
     initial begin
@@ -46,19 +46,26 @@ module tinyml_core #(
     end
 
     localparam [1:0] IDLE = 2'b00;
+    // A five-bit unsigned pixel times a signed 16-bit weight needs 21 bits.
+    // Allow room for every product and the bias in the hidden sum.
+    localparam HIDDEN_WIDTH = 21 + $clog2(INPUT_NODES + 1);
+    localparam SCORE_WIDTH = HIDDEN_WIDTH + 16 + $clog2(HIDDEN_NODES);
 
     reg [(INPUT_NODES * 5)-1:0] pixel_buffer;
     reg [1:0] state = IDLE;
     reg [15:0] pixel_idx = 0;
     reg [15:0] node_idx = 0;
-    reg signed [31:0] accumulator = 0;
-    reg signed [15:0] hidden_nodes [0 : HIDDEN_NODES - 1];
-    reg signed [31:0] output_scores [0 : OUTPUT_NODES - 1];
-    reg signed [31:0] best_score;
+    reg signed [SCORE_WIDTH-1:0] accumulator = 0;
+    reg signed [HIDDEN_WIDTH-1:0] hidden_nodes [0 : HIDDEN_NODES - 1];
+    reg signed [SCORE_WIDTH-1:0] output_scores [0 : OUTPUT_NODES - 1];
+    reg signed [SCORE_WIDTH-1:0] best_score;
     reg [3:0] best_digit;
 
     // Match the downsampler: row-major pixels, with pixel 0 in bits [4:0].
     wire [4:0] pixel_value = pixel_buffer[(pixel_idx * 5) +: 5];
+    wire signed [5:0] signed_pixel = $signed({1'b0, pixel_value});
+    wire signed [SCORE_WIDTH-1:0] hidden_total =
+        accumulator + $signed(hidden_biases[node_idx]);
 
     assign busy = (state != IDLE);
 
@@ -84,10 +91,11 @@ module tinyml_core #(
             2'b01: begin
                 if (node_idx < HIDDEN_NODES) begin
                     if (pixel_idx < INPUT_NODES) begin
-                        accumulator <= accumulator + (pixel_value * hidden_weights[(node_idx * INPUT_NODES) + pixel_idx]);
+                        accumulator <= accumulator + (signed_pixel * hidden_weights[(node_idx * INPUT_NODES) + pixel_idx]);
                         pixel_idx <= pixel_idx + 1;
                     end else begin
-                        hidden_nodes[node_idx] <= ((accumulator + $signed(hidden_biases[node_idx])) < 0) ? 16'd0 : (accumulator + $signed(hidden_biases[node_idx]));
+                        hidden_nodes[node_idx] <= (hidden_total < 0) ?
+                            {HIDDEN_WIDTH{1'b0}} : hidden_total[HIDDEN_WIDTH-1:0];
                         accumulator <= 0;
                         pixel_idx <= 0;
                         node_idx <= node_idx + 1;
