@@ -6,18 +6,21 @@ rtl/downsampler.v.
 
 Two uses:
   1. Testing: the simulation output must match this exactly.
-  2. Training (give this to Divyansh): run every training image through
-     image_to_grid() so the classifier learns from the SAME binary grids the
-     FPGA will produce (8x8 by default, grid=16 for 16x16). If training and hardware preprocessing
-     differ, accuracy on the board drops even if it looks great on the PC.
+  2. Training (give this to Divyansh): image_to_grid() turns any drawing into
+     exactly what the FPGA sends the classifier. 8x8 (default): 64 values
+     0..16, laid out like scikit-learn's load_digits() (no border, digit
+     scaled to fill the frame). Use it to turn board drawings saved by
+     capture_grids.py into extra training data.
 
-Grid layout: grid[row][col], row 0 = top. Hardware bit index = row*GRID + col.
+Grid layout: grid[row][col], row 0 = top. Hardware cell index = row*GRID + col.
 """
 import numpy as np
 
-# grid size -> (PAD, RECIP, SHIFT, TSH); CELLS = grid - 2*PAD. Same as Verilog.
-# TSH: a cell is 1 if count * 2^TSH >= area (3 = 12.5% inked, 2 = 25%).
-SETTINGS = {8: (1, 683, 12, 3), 16: (2, 683, 13, 2)}
+# grid size -> (PAD, RECIP, SHIFT, TSH, GREY); CELLS = grid - 2*PAD. Same as
+# the Verilog defaults in vision_top.v.
+#   8x8 : no border, greyscale 0..16 per cell (matches scikit-learn's digits)
+#   16x16: 2-cell border, 1 bit per cell (1 if count * 2^TSH >= area)
+SETTINGS = {8: (0, 32, 8, 3, True), 16: (2, 683, 13, 2, False)}
 
 
 def divc(n, recip, shift):
@@ -26,8 +29,9 @@ def divc(n, recip, shift):
 
 
 def image_to_grid(img, grid_size=8):
+    """8x8: values 0..16 (round(count*16/area)). 16x16: values 0/1."""
     """img: 2-D array (any size), nonzero = ink. Returns grid_size^2 uint8 grid."""
-    PAD, RECIP, SHIFT, TSH = SETTINGS[grid_size]
+    PAD, RECIP, SHIFT, TSH, GREY = SETTINGS[grid_size]
     CELLS = grid_size - 2 * PAD
     div12 = lambda n: divc(n, RECIP, SHIFT)
     img = np.asarray(img).astype(bool)
@@ -55,7 +59,11 @@ def image_to_grid(img, grid_size=8):
                 for px in range(xs_, xe):
                     if 0 <= px < W and 0 <= py < H and img[py, px]:
                         count += 1
-            grid[cy + PAD, cx + PAD] = 1 if (count << TSH) >= area else 0
+            if GREY:
+                # same as the hardware long division: (count*16 + area//2) // area
+                grid[cy + PAD, cx + PAD] = (count * 16 + area // 2) // area
+            else:
+                grid[cy + PAD, cx + PAD] = 1 if (count << TSH) >= area else 0
     return grid
 
 
@@ -126,7 +134,10 @@ def run_strokes(events, canvas=None):
 
 
 def show(grid):
-    return "\n".join("".join("#" if v else "." for v in row) for row in grid)
+    """Text picture of a grid: '.' empty, then darker characters for more ink."""
+    chars = " .:-=+*#%@"
+    mx = 16 if grid.max() > 1 else 1
+    return "\n".join("".join(chars[min(9, int(v) * 9 // mx)] if v else "." for v in row) for row in grid)
 
 
 if __name__ == "__main__":

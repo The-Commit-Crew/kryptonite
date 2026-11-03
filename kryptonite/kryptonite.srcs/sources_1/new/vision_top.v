@@ -9,7 +9,7 @@
 //   Anannya (UI)   <- oled_x/y -> oled_ink   (to draw the canvas on screen)
 //                  <- live box (to draw a rectangle around the drawing)
 //                  <- grid     (to show the grid preview)
-//   Shrikkanth(ML) <- grid[GRID*GRID-1:0] + grid_valid pulse (+ grid_empty)
+//   Shrikkanth(ML) <- grid (64 cells x 5 bits, values 0..16) + grid_valid pulse
 //
 // Canvas port A is shared: the stroke engine uses it while drawing, and the
 // downsampler uses it while busy. Drawing is paused while downsampling
@@ -17,10 +17,11 @@
 //////////////////////////////////////////////////////////////////////////////
 module vision_top #(
     parameter GRID  = 8,              // 8 -> 8x8 grid, 16 -> 16x16 grid
-    parameter PAD   = (GRID == 16) ? 2 : 1,
-    parameter RECIP = 683,
-    parameter SHIFT = (GRID == 16) ? 13 : 12,
-    parameter TSH   = (GRID == 16) ? 2 : 3     // ink threshold: 25% or 12.5%
+    parameter GREY  = (GRID == 16) ? 0 : 1,    // 8x8: 0..16 per cell (sklearn style)
+    parameter PAD   = (GRID == 16) ? 2 : 0,    // 8x8: no border, like sklearn
+    parameter RECIP = (GRID == 16) ? 683 : 32,
+    parameter SHIFT = (GRID == 16) ? 13 : 8,
+    parameter TSH   = (GRID == 16) ? 2 : 3     // binary mode only
 )(
     input  wire         clk,          // 100 MHz
     input  wire         rst,
@@ -47,7 +48,9 @@ module vision_top #(
     output wire [5:0]   box_ymax,
 
     // result for the classifier
-    output wire [GRID*GRID-1:0] grid, // grid[row*GRID + col]
+    // GREY = 1: cell i (i = row*GRID + col) is grid[i*5 +: 5], value 0..16
+    // GREY = 0: cell i is grid[i]
+    output wire [GRID*GRID*(GREY ? 5 : 1)-1:0] grid,
     output wire         grid_valid,   // one-clock pulse
     output wire         grid_empty,
     output wire         busy
@@ -111,7 +114,7 @@ module vision_top #(
         .b_x(oled_x), .b_y(oled_y), .b_dout(oled_ink)
     );
 
-    downsampler #(.GRID(GRID), .PAD(PAD), .RECIP(RECIP), .SHIFT(SHIFT), .TSH(TSH)) u_ds (
+    downsampler #(.GRID(GRID), .PAD(PAD), .RECIP(RECIP), .SHIFT(SHIFT), .GREY(GREY), .TSH(TSH)) u_ds (
         .clk(clk), .rst(rst), .start(ds_start),
         .rd_x(ds_x), .rd_y(ds_y), .rd_data(a_dout),
         .busy(ds_busy), .done(grid_valid), .empty(grid_empty), .grid(grid),

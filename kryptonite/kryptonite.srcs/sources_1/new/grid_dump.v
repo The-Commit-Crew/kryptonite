@@ -8,12 +8,13 @@
 // which usually helps accuracy a lot, because mouse drawings look different
 // from MNIST's pen-on-paper digits.
 //
-// Format: 0xA5 0x5A, then GBYTES bytes (8 for an 8x8 grid, 32 for 16x16).
-// Byte i holds grid bits [8i+7 : 8i]. For 8x8, byte r is row r.
-// For 16x16, bytes 2r and 2r+1 are row r.
+// Format: 0xA5 0x5A, then GBYTES bytes.
+//   8x8 greyscale (default): 64 bytes, byte i = cell i's value 0..16,
+//   cell i = row*8 + col.
+//   16x16 binary: 32 bytes, byte i holds cell bits [8i+7 : 8i].
 //////////////////////////////////////////////////////////////////////////////
 module grid_dump #(
-    parameter GBYTES = 8             // 8 for 8x8, 32 for 16x16
+    parameter GBYTES = 64            // 64 for 8x8 greyscale, 32 for 16x16 binary
 )(
     input  wire         clk,
     input  wire         rst,
@@ -23,7 +24,7 @@ module grid_dump #(
     output wire         usb_tx       // to RsTx (A18)
 );
     reg  [GBYTES*8-1:0] snap;
-    reg  [5:0]   idx;                // 0 .. GBYTES+1
+    reg  [6:0]   idx;                // 0 .. GBYTES+1 (up to 65)
     reg          active, start;
     reg  [7:0]   byte_out;
     wire         ready, done;
@@ -57,7 +58,7 @@ module grid_dump #(
             end else if (done) begin
                 waiting <= 1'b0;
                 if (idx == GBYTES + 1) active <= 1'b0;
-                else              idx <= idx + 6'd1;
+                else              idx <= idx + 7'd1;
             end
         end
     end

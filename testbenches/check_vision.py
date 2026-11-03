@@ -1,6 +1,7 @@
 """Compare tb_vision.v output with the Python reference."""
 import json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ml_engine"))   # repo layout
 import numpy as np
 GRID = int(os.environ.get('GRID', '8'))
 from preprocess import show
@@ -17,7 +18,7 @@ if len(got) != len(exp):
     ok = False
 for i, (e, (cline, gline)) in enumerate(zip(exp, got)):
     canvas_hw = [int(ch) for ch in cline.strip()]
-    grid_hw = [int(ch) for ch in gline.split()[0]]
+    grid_hw = [int(v) for v in gline.split()[0].strip(",").split(",")]
     c_ok = canvas_hw == e["canvas"]
     g_ok = grid_hw == e["grid"]
     print(f"test {i:2d}: canvas {'PASS' if c_ok else 'FAIL'}  grid {'PASS' if g_ok else 'FAIL'}")

@@ -2,6 +2,7 @@
 import json, os, random, sys
 GRID = int(os.environ.get('GRID', '8'))   # 8 or 16, must match the testbench
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "python"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ml_engine"))   # repo layout
 import numpy as np
 from preprocess import run_strokes, image_to_grid
 

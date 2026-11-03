@@ -16,14 +16,16 @@
 //   btnD  clear canvas          btnL  fault inject (corrupt next packet)
 //   btnR  next 7-seg counter (S sent, r received, E errors, n re-sends)
 //   sw[1:0]  brush: 00 = 1 px, 01 = 3x3, 1x = 5x5
-//   sw[3:2]  view:  00 = canvas, 01 = my grid, 10 = received grid
+//   sw[3:2]  view:  00 = canvas, 01 = my grid (grey shades 0..16),
+//                    10 = received grid (cyan shades)
 //   sw[4]    1 = internal loopback (TX goes straight to my own RX)
 //            0 = use the JA cable to the other board
 //   LEDs: 0 grid empty, 1 link busy, 2 last send OK, 3 last send FAILED,
 //         4 vision busy, 15..8 current TX sequence number
 //////////////////////////////////////////////////////////////////////////////
 module top_khushi #(
-    parameter GRID = 8                // 8 -> 8x8 grid (64 bits), 16 -> 16x16
+    parameter GRID = 8,               // 8 -> 8x8 grid, 16 -> 16x16
+    parameter GREY = (GRID == 16) ? 0 : 1   // 8x8: 0..16 per cell, like vision_top
 )(
     input  wire        clk,
     input  wire        btnC, btnU, btnD, btnL, btnR,
@@ -81,10 +83,27 @@ module top_khushi #(
     wire         has_ink;
     wire [6:0]   bxmin, bxmax;
     wire [5:0]   bymin, bymax;
-    localparam GBITS  = GRID * GRID;      // 64 or 256
-    localparam GBYTES = GBITS / 8;        // 8 or 32 bytes per packet
-    localparam [7:0] GLEN = GBYTES;       // same, as an 8-bit length field
-    wire [GBITS-1:0] grid;
+    localparam NCELL  = GRID * GRID;              // 64 or 256 cells
+    localparam VW     = GREY ? 5 : 1;             // bits per cell
+    localparam GW     = NCELL * VW;               // width of the grid bus
+    // Packets and the PC dump carry bytes. Greyscale: one byte per cell
+    // (value 0..16), so 64 bytes. Binary: 8 cells packed per byte.
+    localparam GBYTES = GREY ? NCELL : NCELL / 8;
+    localparam [7:0] GLEN = GBYTES;               // as an 8-bit length field
+    wire [GW-1:0] grid;
+
+    // the grid as bytes
+    wire [GBYTES*8-1:0] gbytes;
+    genvar gi;
+    generate
+        if (GREY) begin : g_grey
+            for (gi = 0; gi < NCELL; gi = gi + 1) begin : g_cell
+                assign gbytes[gi*8 +: 8] = {3'b000, grid[gi*VW +: 5]};
+            end
+        end else begin : g_bin
+            assign gbytes = grid;
+        end
+    endgenerate
     wire         grid_valid, grid_empty, v_busy;
 
     vision_top #(.GRID(GRID)) u_vision (
@@ -124,19 +143,19 @@ module top_khushi #(
         .cnt_sent(c_s), .cnt_recv(c_r), .cnt_err(c_e), .cnt_retry(c_n));
 
     // after a new non-empty grid: copy its 32 bytes into the TX buffer, send
-    reg [GBITS-1:0] tx_grid;
-    reg [5:0]   wr_i;
+    reg [GBYTES*8-1:0] tx_bytes;
+    reg [6:0]   wr_i;
     reg         loading;
     always @(posedge clk) begin
         if (rst) begin
             loading <= 0; wr_i <= 0; l_we <= 0; l_wa <= 0; l_wd <= 0; l_send <= 0;
-            tx_grid <= 0;
+            tx_bytes <= 0;
         end else begin
             l_we <= 1'b0;
             l_send <= 1'b0;
             if (!loading) begin
                 if (grid_valid && !grid_empty && !l_busy) begin
-                    tx_grid <= grid;
+                    tx_bytes <= gbytes;
                     wr_i    <= 0;
                     loading <= 1'b1;
                 end
@@ -145,20 +164,20 @@ module top_khushi #(
                 loading <= 1'b0;
             end else begin
                 l_we <= 1'b1;
-                l_wa <= {1'b0, wr_i};
-                l_wd <= tx_grid[wr_i*8 +: 8];
-                wr_i <= wr_i + 6'd1;
+                l_wa <= wr_i;
+                l_wd <= tx_bytes[wr_i*8 +: 8];
+                wr_i <= wr_i + 7'd1;
             end
         end
     end
 
-    // when a grid packet arrives: read its 32 bytes into rx_grid
-    reg [GBITS-1:0] rx_grid;
-    reg [5:0]   rd_i;
+    // when a grid packet arrives: read its bytes into rx_bytes
+    reg [GBYTES*8-1:0] rx_bytes;
+    reg [6:0]   rd_i;
     reg         reading;
     always @(posedge clk) begin
         if (rst) begin
-            reading <= 0; rd_i <= 0; l_ra <= 0; rx_grid <= 0;
+            reading <= 0; rd_i <= 0; l_ra <= 0; rx_bytes <= 0;
         end else if (!reading) begin
             if (l_rxv && l_rtype == T_GRID && l_rlen == GBYTES) begin
                 reading <= 1'b1;
@@ -167,16 +186,16 @@ module top_khushi #(
             end
         end else begin
             // l_rd is combinational from l_ra
-            rx_grid[rd_i*8 +: 8] <= l_rd;
+            rx_bytes[rd_i*8 +: 8] <= l_rd;
             if (rd_i == GBYTES - 1) reading <= 1'b0;
-            rd_i <= rd_i + 6'd1;
+            rd_i <= rd_i + 7'd1;
             l_ra <= l_ra + 7'd1;
         end
     end
 
     //------------------------------------------------------------ PC dump
     grid_dump #(.GBYTES(GBYTES)) u_dump (.clk(clk), .rst(rst), .tick16(tick16),
-                      .trigger(grid_valid & ~grid_empty), .grid(grid), .usb_tx(RsTx));
+                      .trigger(grid_valid & ~grid_empty), .grid(gbytes), .usb_tx(RsTx));
 
     //------------------------------------------------------------ 7-segment
     seg7_stats u_seg (.clk(clk), .rst(rst), .next(p_next),
@@ -220,7 +239,7 @@ module top_khushi #(
     assign oy = py;
 
     localparam WHITE = 16'hFFFF, BLACK = 16'h0000, RED = 16'hF800,
-               GREEN = 16'h07E0, GREY = 16'h2104, CYAN = 16'h07FF;
+               GREEN = 16'h07E0, DARK = 16'h2104, CYAN = 16'h07FF;
 
     wire on_cursor = ((px == cur_x) && (py >= cur_y - 1) && (py <= cur_y + 1)) ||
                      ((py == cur_y) && (px >= cur_x - 1) && (px <= cur_x + 1));
@@ -234,10 +253,21 @@ module top_khushi #(
     wire [7:0]  gidx = (GRID == 16) ? {py[5:2], gx[5:2]}           // row*16 + col
                                     : {2'b00, py[5:3], gx[5:3]};   // row*8 + col
 
+    // value of the preview cell, 0..16 (binary cells show as 0 or 16)
+    wire [4:0] my_v = GREY ? gbytes[{gidx, 3'b000} +: 5]   : (gbytes[gidx]   ? 5'd16 : 5'd0);
+    wire [4:0] rx_v = GREY ? rx_bytes[{gidx, 3'b000} +: 5] : (rx_bytes[gidx] ? 5'd16 : 5'd0);
+    // 0..16 -> brightness: red/blue 5 bits (x2), green 6 bits (x4), capped
+    wire [4:0] my_rb = (my_v == 5'd16) ? 5'd31 : {my_v[3:0], 1'b0};
+    wire [5:0] my_g  = (my_v == 5'd16) ? 6'd63 : {my_v[3:0], 2'b00};
+    wire [4:0] rx_rb = (rx_v == 5'd16) ? 5'd31 : {rx_v[3:0], 1'b0};
+    wire [5:0] rx_g  = (rx_v == 5'd16) ? 6'd63 : {rx_v[3:0], 2'b00};
+    wire [15:0] my_shade = {my_rb, my_g, my_rb};     // white-to-black
+    wire [15:0] rx_shade = {5'd0, rx_g, rx_rb};      // cyan-to-black
+
     always @(*) begin
         case (sw[3:2])
-            2'b01: pdata = !in_prev ? BLACK : (grid[gidx]    ? WHITE : GREY);
-            2'b10: pdata = !in_prev ? BLACK : (rx_grid[gidx] ? CYAN  : GREY);
+            2'b01: pdata = !in_prev ? BLACK : my_shade;      // my grid, grey shades
+            2'b10: pdata = !in_prev ? BLACK : rx_shade;      // received grid, cyan shades
             default: begin
                 if (on_cursor)   pdata = RED;
                 else if (oink)   pdata = WHITE;
