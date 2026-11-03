@@ -28,12 +28,14 @@ module tinyml_core #(
     input clk,
     input clear,
     input start,
-    input [INPUT_NODES-1:0] pixels,
-    output reg [3:0] prediction = 0
+    input [(INPUT_NODES * 5)-1:0] pixels,
+    output reg [3:0] prediction = 0,
+    output reg done = 0,
+    output wire busy
 );
-    reg [15:0] hidden_weights [0 : (INPUT_NODES * HIDDEN_NODES) - 1];
+    reg signed [15:0] hidden_weights [0 : (INPUT_NODES * HIDDEN_NODES) - 1];
     reg [15:0] hidden_biases  [0 : HIDDEN_NODES - 1];
-    reg [15:0] output_weights [0 : (HIDDEN_NODES * OUTPUT_NODES) - 1];
+    reg signed [15:0] output_weights [0 : (HIDDEN_NODES * OUTPUT_NODES) - 1];
     reg [15:0] output_biases  [0 : OUTPUT_NODES - 1];
     
     initial begin
@@ -43,25 +45,42 @@ module tinyml_core #(
         $readmemh("ob.mem", output_biases);
     end
 
-    reg [INPUT_NODES-1:0] pixel_buffer;
-    always @ (posedge clk) begin
-        if (clear) 
-            pixel_buffer <= 0;
-        else if (start) 
-            pixel_buffer <= pixels;
-    end
-    
-    reg [1:0] state = 0;
+    localparam [1:0] IDLE = 2'b00;
+    // A five-bit unsigned pixel times a signed 16-bit weight needs 21 bits.
+    // Allow room for every product and the bias in the hidden sum.
+    localparam HIDDEN_WIDTH = 21 + $clog2(INPUT_NODES + 1);
+    localparam SCORE_WIDTH = HIDDEN_WIDTH + 16 + $clog2(HIDDEN_NODES);
+
+    reg [(INPUT_NODES * 5)-1:0] pixel_buffer;
+    reg [1:0] state = IDLE;
     reg [15:0] pixel_idx = 0;
     reg [15:0] node_idx = 0;
-    reg signed [31:0] accumulator = 0;
-    reg signed [15:0] hidden_nodes [0 : HIDDEN_NODES - 1];
-    reg signed [31:0] output_scores [0 : OUTPUT_NODES - 1];
+    reg signed [SCORE_WIDTH-1:0] accumulator = 0;
+    reg signed [HIDDEN_WIDTH-1:0] hidden_nodes [0 : HIDDEN_NODES - 1];
+    reg signed [SCORE_WIDTH-1:0] output_scores [0 : OUTPUT_NODES - 1];
+    reg signed [SCORE_WIDTH-1:0] best_score;
+    reg [3:0] best_digit;
+
+    // Match the downsampler: row-major pixels, with pixel 0 in bits [4:0].
+    wire [4:0] pixel_value = pixel_buffer[(pixel_idx * 5) +: 5];
+    wire signed [5:0] signed_pixel = $signed({1'b0, pixel_value});
+    wire signed [SCORE_WIDTH-1:0] hidden_total =
+        accumulator + $signed(hidden_biases[node_idx]);
+
+    assign busy = (state != IDLE);
 
     always @ (posedge clk) begin
-        case (state)
-            2'b00: begin
+        done <= 1'b0;
+        if (clear) begin
+            state <= IDLE;
+            pixel_buffer <= 0;
+            pixel_idx <= 0;
+            node_idx <= 0;
+            accumulator <= 0;
+        end else case (state)
+            IDLE: begin
                 if (start) begin
+                    pixel_buffer <= pixels;
                     state <= 2'b01;
                     pixel_idx <= 0;
                     node_idx <= 0;
@@ -72,10 +91,11 @@ module tinyml_core #(
             2'b01: begin
                 if (node_idx < HIDDEN_NODES) begin
                     if (pixel_idx < INPUT_NODES) begin
-                        accumulator <= accumulator + (pixel_buffer[pixel_idx] * hidden_weights[(node_idx * INPUT_NODES) + pixel_idx]);
+                        accumulator <= accumulator + (signed_pixel * hidden_weights[(node_idx * INPUT_NODES) + pixel_idx]);
                         pixel_idx <= pixel_idx + 1;
                     end else begin
-                        hidden_nodes[node_idx] <= ((accumulator + $signed(hidden_biases[node_idx])) < 0) ? 16'd0 : (accumulator + $signed(hidden_biases[node_idx]));
+                        hidden_nodes[node_idx] <= (hidden_total < 0) ?
+                            {HIDDEN_WIDTH{1'b0}} : hidden_total[HIDDEN_WIDTH-1:0];
                         accumulator <= 0;
                         pixel_idx <= 0;
                         node_idx <= node_idx + 1;
@@ -100,19 +120,23 @@ module tinyml_core #(
                     end
                 end else begin
                     state <= 2'b11;
+                    node_idx <= 0;
                 end
             end
             2'b11: begin
-                // TODO (Shrikkanth): Implement ArgMax Prediction Loop
-                // 1. Declare two trackers ABOVE the always block:
-                //    reg signed [31:0] max_score = -2147483648; 
-                //    reg [3:0] best_index = 0;
-                // 2. Loop 'node_idx' from 0 to (OUTPUT_NODES - 1) across clock cycles.
-                // 3. If output_scores[node_idx] > max_score, update max_score and best_index.
-                // 4. When node_idx == OUTPUT_NODES:
-                //    - Assign prediction <= best_index
-                //    - Reset max_score <= -2147483648
-                //    - Reset state <= 2'b00
+                if (node_idx < OUTPUT_NODES) begin
+                    // Seed from score 0 and keep the lower digit on ties.
+                    if (node_idx == 0 || output_scores[node_idx] > best_score) begin
+                        best_score <= output_scores[node_idx];
+                        best_digit <= node_idx[3:0];
+                    end
+                    node_idx <= node_idx + 1;
+                end else begin
+                    // Publish after the final comparison has updated best_digit.
+                    prediction <= best_digit;
+                    done <= 1'b1;
+                    state <= IDLE;
+                end
             end
         endcase
     end
