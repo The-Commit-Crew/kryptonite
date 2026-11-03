@@ -30,7 +30,8 @@ module tinyml_core #(
     input start,
     input [INPUT_NODES-1:0] pixels,
     output reg [3:0] prediction = 0,
-    output reg done = 0
+    output reg done = 0,
+    output wire busy
 );
     reg [15:0] hidden_weights [0 : (INPUT_NODES * HIDDEN_NODES) - 1];
     reg [15:0] hidden_biases  [0 : HIDDEN_NODES - 1];
@@ -44,15 +45,10 @@ module tinyml_core #(
         $readmemh("ob.mem", output_biases);
     end
 
+    localparam [1:0] IDLE = 2'b00;
+
     reg [INPUT_NODES-1:0] pixel_buffer;
-    always @ (posedge clk) begin
-        if (clear) 
-            pixel_buffer <= 0;
-        else if (start) 
-            pixel_buffer <= pixels;
-    end
-    
-    reg [1:0] state = 0;
+    reg [1:0] state = IDLE;
     reg [15:0] pixel_idx = 0;
     reg [15:0] node_idx = 0;
     reg signed [31:0] accumulator = 0;
@@ -61,11 +57,20 @@ module tinyml_core #(
     reg signed [31:0] best_score;
     reg [3:0] best_digit;
 
+    assign busy = (state != IDLE);
+
     always @ (posedge clk) begin
         done <= 1'b0;
-        case (state)
-            2'b00: begin
+        if (clear) begin
+            state <= IDLE;
+            pixel_buffer <= 0;
+            pixel_idx <= 0;
+            node_idx <= 0;
+            accumulator <= 0;
+        end else case (state)
+            IDLE: begin
                 if (start) begin
+                    pixel_buffer <= pixels;
                     state <= 2'b01;
                     pixel_idx <= 0;
                     node_idx <= 0;
@@ -119,7 +124,7 @@ module tinyml_core #(
                     // Publish after the final comparison has updated best_digit.
                     prediction <= best_digit;
                     done <= 1'b1;
-                    state <= 2'b00;
+                    state <= IDLE;
                 end
             end
         endcase
