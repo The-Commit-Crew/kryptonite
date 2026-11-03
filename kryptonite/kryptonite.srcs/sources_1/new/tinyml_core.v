@@ -29,7 +29,8 @@ module tinyml_core #(
     input clear,
     input start,
     input [INPUT_NODES-1:0] pixels,
-    output reg [3:0] prediction = 0
+    output reg [3:0] prediction = 0,
+    output reg done = 0
 );
     reg [15:0] hidden_weights [0 : (INPUT_NODES * HIDDEN_NODES) - 1];
     reg [15:0] hidden_biases  [0 : HIDDEN_NODES - 1];
@@ -57,8 +58,11 @@ module tinyml_core #(
     reg signed [31:0] accumulator = 0;
     reg signed [15:0] hidden_nodes [0 : HIDDEN_NODES - 1];
     reg signed [31:0] output_scores [0 : OUTPUT_NODES - 1];
+    reg signed [31:0] best_score;
+    reg [3:0] best_digit;
 
     always @ (posedge clk) begin
+        done <= 1'b0;
         case (state)
             2'b00: begin
                 if (start) begin
@@ -100,19 +104,23 @@ module tinyml_core #(
                     end
                 end else begin
                     state <= 2'b11;
+                    node_idx <= 0;
                 end
             end
             2'b11: begin
-                // TODO (Shrikkanth): Implement ArgMax Prediction Loop
-                // 1. Declare two trackers ABOVE the always block:
-                //    reg signed [31:0] max_score = -2147483648; 
-                //    reg [3:0] best_index = 0;
-                // 2. Loop 'node_idx' from 0 to (OUTPUT_NODES - 1) across clock cycles.
-                // 3. If output_scores[node_idx] > max_score, update max_score and best_index.
-                // 4. When node_idx == OUTPUT_NODES:
-                //    - Assign prediction <= best_index
-                //    - Reset max_score <= -2147483648
-                //    - Reset state <= 2'b00
+                if (node_idx < OUTPUT_NODES) begin
+                    // Seed from score 0 and keep the lower digit on ties.
+                    if (node_idx == 0 || output_scores[node_idx] > best_score) begin
+                        best_score <= output_scores[node_idx];
+                        best_digit <= node_idx[3:0];
+                    end
+                    node_idx <= node_idx + 1;
+                end else begin
+                    // Publish after the final comparison has updated best_digit.
+                    prediction <= best_digit;
+                    done <= 1'b1;
+                    state <= 2'b00;
+                end
             end
         endcase
     end
