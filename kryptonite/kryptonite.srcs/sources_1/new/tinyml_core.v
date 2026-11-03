@@ -28,7 +28,7 @@ module tinyml_core #(
     input clk,
     input clear,
     input start,
-    input [INPUT_NODES-1:0] pixels,
+    input [(INPUT_NODES * 5)-1:0] pixels,
     output reg [3:0] prediction = 0,
     output reg done = 0,
     output wire busy
@@ -47,7 +47,7 @@ module tinyml_core #(
 
     localparam [1:0] IDLE = 2'b00;
 
-    reg [INPUT_NODES-1:0] pixel_buffer;
+    reg [(INPUT_NODES * 5)-1:0] pixel_buffer;
     reg [1:0] state = IDLE;
     reg [15:0] pixel_idx = 0;
     reg [15:0] node_idx = 0;
@@ -56,6 +56,9 @@ module tinyml_core #(
     reg signed [31:0] output_scores [0 : OUTPUT_NODES - 1];
     reg signed [31:0] best_score;
     reg [3:0] best_digit;
+
+    // Match the downsampler: row-major pixels, with pixel 0 in bits [4:0].
+    wire [4:0] pixel_value = pixel_buffer[(pixel_idx * 5) +: 5];
 
     assign busy = (state != IDLE);
 
@@ -81,7 +84,7 @@ module tinyml_core #(
             2'b01: begin
                 if (node_idx < HIDDEN_NODES) begin
                     if (pixel_idx < INPUT_NODES) begin
-                        accumulator <= accumulator + (pixel_buffer[pixel_idx] * hidden_weights[(node_idx * INPUT_NODES) + pixel_idx]);
+                        accumulator <= accumulator + (pixel_value * hidden_weights[(node_idx * INPUT_NODES) + pixel_idx]);
                         pixel_idx <= pixel_idx + 1;
                     end else begin
                         hidden_nodes[node_idx] <= ((accumulator + $signed(hidden_biases[node_idx])) < 0) ? 16'd0 : (accumulator + $signed(hidden_biases[node_idx]));
