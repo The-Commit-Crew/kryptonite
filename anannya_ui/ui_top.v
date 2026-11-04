@@ -1,24 +1,4 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 11/04/2026 06:20:57 PM
-// Design Name: 
-// Module Name: ui_top
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
-
 module ui_top(
     input clk,
     input [15:0] sw,
@@ -31,15 +11,15 @@ module ui_top(
     input  JA_RX
 );
     localparam MAXLEN = 16;
-    localparam LOGN   = 16;
     localparam S_DRAW = 3'd0, S_WAIT = 3'd1, S_RESULT = 3'd2, S_MSG = 3'd3, S_RX = 3'd4;
     localparam WHITE = 16'hFFFF, BLACK = 16'h0000, RED = 16'hF800,
                GREEN = 16'h07E0, CYAN = 16'h07FF, YELLOW = 16'hFFE0;
 
-    //---------------------------------------------------------- reset: sw[15]
+    //---------------------------------------------------------- reset: sw[15], role: sw[13]
     reg [1:0] rs = 2'b00;
     always @(posedge clk) rs <= {rs[0], sw[15]};
     wire rst = rs[1];
+    wire role_rx = sw[13];                 // 0 = sender, 1 = receiver (read live)
 
     //---------------------------------------------------------- buttons
     wire p_submit, p_confirm, p_retry, p_clear, p_next;
@@ -118,20 +98,32 @@ module ui_top(
         .submit_out(ctrl_submit), .clear_out(ctrl_clear),
         .confirm_out(ctrl_confirm), .rx_clear_out(ctrl_rxclr));
 
-    wire in_draw = (state == S_DRAW);
+    wire in_draw  = (state == S_DRAW);
     wire msg_full = (msg_len >= MAXLEN);
 
-    //---------------------------------------------------------- UART link
-    wire [LOGN*8-1:0] rx_log;
-    wire [4:0]        rx_n;
-    wire              link_ok, link_fail, link_busy;
-    ui_link #(.LOGN(LOGN)) u_link (
-        .clk(clk), .rst(rst),
-        .send_pulse(ctrl_confirm), .send_byte({4'd0, digit}),
-        .rx_clear(ctrl_rxclr), .loopback(sw[4]),
+    //---------------------------------------------------------- message layer + UART
+    wire [MAXLEN*8-1:0] rx_log;
+    wire [4:0]          rx_n;
+    wire [MAXLEN*4-1:0] rmsg;
+    wire [4:0]          rmsg_len;
+    wire                link_ok, link_fail, link_busy;
+
+    // SEND = btnC while on the MESSAGE screen (sender role only)
+    wire send_req   = p_confirm & (state == S_MSG) & ~role_rx;
+    // receiver role: btnD on the MESSAGE screen clears the received message
+    wire rx_clr_all = ctrl_rxclr | (p_clear & (state == S_MSG) & role_rx);
+
+    top_fsm #(.MAXLEN(MAXLEN)) u_fsm (
+        .clk(clk), .rst(rst), .loopback(sw[4]),
         .rx_pin(JA_RX), .tx_pin(JA_TX),
-        .send_ok(link_ok), .send_fail(link_fail),
-        .rx_log(rx_log), .rx_n(rx_n), .tx_busy(link_busy));
+        .send_req(send_req), .msg_in(msg), .msg_len_in(msg_len),
+        .rx_clear(rx_clr_all),
+        .send_ok(link_ok), .send_fail(link_fail), .tx_busy(link_busy),
+        .rx_log(rx_log), .rx_n(rx_n), .rmsg(rmsg), .rmsg_len(rmsg_len));
+
+    // what the MESSAGE screen shows: our own message, or the received one
+    wire [MAXLEN*4-1:0] disp_msg = role_rx ? rmsg : msg;
+    wire [4:0]          disp_len = role_rx ? rmsg_len : msg_len;
 
     //---------------------------------------------------------- vision + ML (Shrikkanth/Khushi)
     wire [6:0] ox;
@@ -176,20 +168,22 @@ module ui_top(
                     ((py == bymin || py == bymax) && px >= bxmin && px <= bxmax) );
 
     //---------------------------------------------------------- text
-    function [7:0] d2a;
+    function [7:0] d2a;                      // digit -> ASCII, else 'E'
         input [3:0] d;
         begin
-            d2a = (d <= 4'd9) ? (8'h30 + {4'd0, d}) : 8'h45;   // digit, else 'E'
+            d2a = (d <= 4'd9) ? (8'h30 + {4'd0, d}) : 8'h45;
         end
     endfunction
 
-    // hex digit 0..15 -> ASCII '0'-'9','A'-'F'
-    function [7:0] h2a;
+    function [7:0] h2a;                      // hex digit 0..15 -> '0'-'9','A'-'F'
         input [3:0] h;
         begin
             h2a = (h <= 4'd9) ? (8'h30 + {4'd0, h}) : (8'h37 + {4'd0, h});
         end
     endfunction
+
+    // link status word, used on the MSG and RX screens
+    wire [31:0] st_chars = link_ok ? "OK  " : (link_fail ? "FAIL" : "    ");
 
     // note on the DRAW screen
     wire [39:0] note_chars = (note == 2'd1) ? "EMPTY" : "ERR  ";
@@ -207,32 +201,35 @@ module ui_top(
     wire [95:0] hint_chars = msg_full ? "FULL L:RETRY" : "C:OK L:RETRY";
     text_line #(.N(12), .X0(12), .Y0(48), .SCALE(1)) u_t_hint (.px(px), .py(py), .chars(hint_chars), .on(t_hint));
 
-    // MESSAGE screen: header with the length, two rows of 8 digits, a hint line
-    wire [7:0] len_t = (msg_len >= 5'd10) ? 8'h31 : 8'h30;
-    wire [4:0] len_u5 = (msg_len >= 5'd10) ? (msg_len - 5'd10) : msg_len;
+    // MESSAGE screen: header + link status, two rows of 8 digits, a hint line
+    wire [7:0] len_t = (disp_len >= 5'd10) ? 8'h31 : 8'h30;
+    wire [4:0] len_u5 = (disp_len >= 5'd10) ? (disp_len - 5'd10) : disp_len;
     wire [7:0] len_u = 8'h30 + {4'd0, len_u5[3:0]};
     wire [47:0] hdr_chars = {"MSG ", len_t, len_u};
-    wire t_hdr, t_row1, t_row2, t_mhint;
-    text_line #(.N(6), .X0(0), .Y0(0), .SCALE(1)) u_t_hdr (.px(px), .py(py), .chars(hdr_chars), .on(t_hdr));
+    wire t_hdr, t_ms, t_row1, t_row2, t_mhint;
+    text_line #(.N(6), .X0(0),  .Y0(0), .SCALE(1)) u_t_hdr (.px(px), .py(py), .chars(hdr_chars), .on(t_hdr));
+    text_line #(.N(4), .X0(66), .Y0(0), .SCALE(1)) u_t_ms  (.px(px), .py(py), .chars(st_chars),  .on(t_ms));
 
     wire [63:0] row1_chars, row2_chars;
     genvar k, r, j;
     generate
         for (k = 0; k < 8; k = k + 1) begin : g_row
-            assign row1_chars[(7-k)*8 +: 8] = (k < msg_len)     ? d2a(msg[k*4 +: 4])     : 8'h20;
-            assign row2_chars[(7-k)*8 +: 8] = ((k + 8) < msg_len) ? d2a(msg[(k+8)*4 +: 4]) : 8'h20;
+            assign row1_chars[(7-k)*8 +: 8] = (k < disp_len)       ? d2a(disp_msg[k*4 +: 4])     : 8'h20;
+            assign row2_chars[(7-k)*8 +: 8] = ((k + 8) < disp_len) ? d2a(disp_msg[(k+8)*4 +: 4]) : 8'h20;
         end
     endgenerate
     text_line #(.N(8), .X0(0), .Y0(14), .SCALE(2)) u_t_r1 (.px(px), .py(py), .chars(row1_chars), .on(t_row1));
     text_line #(.N(8), .X0(0), .Y0(32), .SCALE(2)) u_t_r2 (.px(px), .py(py), .chars(row2_chars), .on(t_row2));
-    text_line #(.N(12), .X0(12), .Y0(54), .SCALE(1)) u_t_mh (.px(px), .py(py), .chars("D:CLR R:LOG "), .on(t_mhint));
+
+    // both branches are exactly 16 characters (96 pixels wide)
+    wire [127:0] mhint_chars = role_rx ? {"D:CLR R:LOG", 40'h2020202020} : "C:GO D:CLR R:LOG";
+    text_line #(.N(16), .X0(0), .Y0(54), .SCALE(1)) u_t_mh (.px(px), .py(py), .chars(mhint_chars), .on(t_mhint));
 
     // RX screen: "GOT nn" + OK/FAIL on top, 4 rows of 4 hex bytes, hint line
     wire [7:0]  rn_t  = (rx_n >= 5'd10) ? 8'h31 : 8'h30;
     wire [4:0]  rn_u5 = (rx_n >= 5'd10) ? (rx_n - 5'd10) : rx_n;
     wire [7:0]  rn_u  = 8'h30 + {4'd0, rn_u5[3:0]};
     wire [47:0] rxh_chars = {"GOT ", rn_t, rn_u};
-    wire [31:0] st_chars  = link_ok ? "OK  " : (link_fail ? "FAIL" : "    ");
     wire t_gh, t_gs, t_x0, t_x1, t_x2, t_x3, t_ghint;
     text_line #(.N(6), .X0(0),  .Y0(0), .SCALE(1)) u_t_gh (.px(px), .py(py), .chars(rxh_chars), .on(t_gh));
     text_line #(.N(4), .X0(66), .Y0(0), .SCALE(1)) u_t_gs (.px(px), .py(py), .chars(st_chars),  .on(t_gs));
@@ -279,6 +276,7 @@ module ui_top(
             end
             S_MSG: begin
                 if      (t_hdr)            pdata = YELLOW;
+                else if (t_ms)             pdata = link_fail ? RED : GREEN;
                 else if (t_row1 | t_row2)  pdata = WHITE;
                 else if (t_mhint)          pdata = GREEN;
             end
@@ -300,5 +298,6 @@ module ui_top(
     assign JC[2] = 1'b0;
 
     //---------------------------------------------------------- LEDs
+    // [15:11] msg_len  [10] note  [9] left click  [8:5] digit  [4] busy  [3] has_ink  [2:0] state
     assign led = {msg_len, (note != 2'd0), m_left, digit, busy_i, has_ink, state};
 endmodule
