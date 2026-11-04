@@ -4,8 +4,7 @@ module tb_font_rom;
     reg  [2:0] row   = 3'd0;
     wire [4:0] bits;
     integer errors = 0;
-    integer r;
-    reg any;
+    integer c;                         // outer-loop counter (tasks have their own)
 
     font_rom dut (.ascii(ascii), .row(row), .bits(bits));
 
@@ -24,10 +23,12 @@ module tb_font_rom;
 
     task nonblank;                     // at least one lit pixel somewhere
         input [7:0] a;
+        integer i;
+        reg any;
         begin
             any = 0;
-            for (r = 0; r < 7; r = r + 1) begin
-                ascii = a; row = r; #1;
+            for (i = 0; i < 7; i = i + 1) begin
+                ascii = a; row = i[2:0]; #1;
                 if (bits !== 5'b00000) any = 1;
             end
             if (!any) begin errors = errors + 1; $display("FAIL: char %h is blank", a); end
@@ -36,10 +37,12 @@ module tb_font_rom;
 
     task blank;                        // no lit pixel anywhere
         input [7:0] a;
+        integer i;
+        reg any;
         begin
             any = 0;
-            for (r = 0; r < 7; r = r + 1) begin
-                ascii = a; row = r; #1;
+            for (i = 0; i < 7; i = i + 1) begin
+                ascii = a; row = i[2:0]; #1;
                 if (bits !== 5'b00000) any = 1;
             end
             if (any) begin errors = errors + 1; $display("FAIL: char %h should be blank", a); end
@@ -79,8 +82,8 @@ module tb_font_rom;
         row_is(8'h59, 6, 5'b00100);                               // Y
         row_is(8'h3A, 1, 5'b00100);                               // :
         // ---- everything we draw is non-blank ----
-        for (r = 8'h30; r <= 8'h39; r = r + 1) nonblank(r);       // 0-9
-        for (r = 8'h41; r <= 8'h5A; r = r + 1) nonblank(r);       // A-Z
+        for (c = 8'h30; c <= 8'h39; c = c + 1) nonblank(c[7:0]);  // 0-9
+        for (c = 8'h41; c <= 8'h5A; c = c + 1) nonblank(c[7:0]);  // A-Z
         nonblank(8'h2D); nonblank(8'h21); nonblank(8'h2E); nonblank(8'h3E);
         // ---- unsupported characters stay blank ----
         blank(8'h20); blank(8'h61); blank(8'h40); blank(8'h7E); blank(8'h00);
