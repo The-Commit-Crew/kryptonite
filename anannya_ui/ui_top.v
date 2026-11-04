@@ -19,7 +19,6 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
-
 module ui_top(
     input clk,
     input [15:0] sw,
@@ -27,10 +26,13 @@ module ui_top(
     output [15:0] led,
     output [7:0]  JC,
     inout  PS2Clk,
-    inout  PS2Data
+    inout  PS2Data,
+    output JA_TX,
+    input  JA_RX
 );
     localparam MAXLEN = 16;
-    localparam S_DRAW = 2'd0, S_WAIT = 2'd1, S_RESULT = 2'd2, S_MSG = 2'd3;
+    localparam LOGN   = 16;
+    localparam S_DRAW = 3'd0, S_WAIT = 3'd1, S_RESULT = 3'd2, S_MSG = 3'd3, S_RX = 3'd4;
     localparam WHITE = 16'hFFFF, BLACK = 16'h0000, RED = 16'hF800,
                GREEN = 16'h07E0, CYAN = 16'h07FF, YELLOW = 16'hFFE0;
 
@@ -71,12 +73,12 @@ module ui_top(
     wire mid_pulse = m_mid & ~mid_q;
 
     //---------------------------------------------------------- UI state machine
-    wire [1:0]  state;
+    wire [2:0]  state;
     wire [3:0]  digit;
     wire [MAXLEN*4-1:0] msg;
     wire [4:0]  msg_len;
     wire [1:0]  note;
-    wire        ctrl_submit, ctrl_clear;
+    wire        ctrl_submit, ctrl_clear, ctrl_confirm, ctrl_rxclr;
 
     wire        v_busy, has_ink, oink;
     wire        grid_valid, grid_empty, prediction_valid;
@@ -113,10 +115,23 @@ module ui_top(
         .p_clear(p_clear), .p_next(p_next),
         .busy_i(busy_i), .pred_valid(pred_valid_i), .pred(pred_i), .empty_i(empty_i),
         .state(state), .digit(digit), .msg(msg), .msg_len(msg_len), .note(note),
-        .submit_out(ctrl_submit), .clear_out(ctrl_clear));
+        .submit_out(ctrl_submit), .clear_out(ctrl_clear),
+        .confirm_out(ctrl_confirm), .rx_clear_out(ctrl_rxclr));
 
     wire in_draw = (state == S_DRAW);
     wire msg_full = (msg_len >= MAXLEN);
+
+    //---------------------------------------------------------- UART link
+    wire [LOGN*8-1:0] rx_log;
+    wire [4:0]        rx_n;
+    wire              link_ok, link_fail, link_busy;
+    ui_link #(.LOGN(LOGN)) u_link (
+        .clk(clk), .rst(rst),
+        .send_pulse(ctrl_confirm), .send_byte({4'd0, digit}),
+        .rx_clear(ctrl_rxclr), .loopback(sw[4]),
+        .rx_pin(JA_RX), .tx_pin(JA_TX),
+        .send_ok(link_ok), .send_fail(link_fail),
+        .rx_log(rx_log), .rx_n(rx_n), .tx_busy(link_busy));
 
     //---------------------------------------------------------- vision + ML (Shrikkanth/Khushi)
     wire [6:0] ox;
@@ -168,6 +183,14 @@ module ui_top(
         end
     endfunction
 
+    // hex digit 0..15 -> ASCII '0'-'9','A'-'F'
+    function [7:0] h2a;
+        input [3:0] h;
+        begin
+            h2a = (h <= 4'd9) ? (8'h30 + {4'd0, h}) : (8'h37 + {4'd0, h});
+        end
+    endfunction
+
     // note on the DRAW screen
     wire [39:0] note_chars = (note == 2'd1) ? "EMPTY" : "ERR  ";
     wire t_note;
@@ -193,7 +216,7 @@ module ui_top(
     text_line #(.N(6), .X0(0), .Y0(0), .SCALE(1)) u_t_hdr (.px(px), .py(py), .chars(hdr_chars), .on(t_hdr));
 
     wire [63:0] row1_chars, row2_chars;
-    genvar k;
+    genvar k, r, j;
     generate
         for (k = 0; k < 8; k = k + 1) begin : g_row
             assign row1_chars[(7-k)*8 +: 8] = (k < msg_len)     ? d2a(msg[k*4 +: 4])     : 8'h20;
@@ -202,7 +225,38 @@ module ui_top(
     endgenerate
     text_line #(.N(8), .X0(0), .Y0(14), .SCALE(2)) u_t_r1 (.px(px), .py(py), .chars(row1_chars), .on(t_row1));
     text_line #(.N(8), .X0(0), .Y0(32), .SCALE(2)) u_t_r2 (.px(px), .py(py), .chars(row2_chars), .on(t_row2));
-    text_line #(.N(12), .X0(12), .Y0(54), .SCALE(1)) u_t_mh (.px(px), .py(py), .chars("D:CLR R:BACK"), .on(t_mhint));
+    text_line #(.N(12), .X0(12), .Y0(54), .SCALE(1)) u_t_mh (.px(px), .py(py), .chars("D:CLR R:LOG "), .on(t_mhint));
+
+    // RX screen: "GOT nn" + OK/FAIL on top, 4 rows of 4 hex bytes, hint line
+    wire [7:0]  rn_t  = (rx_n >= 5'd10) ? 8'h31 : 8'h30;
+    wire [4:0]  rn_u5 = (rx_n >= 5'd10) ? (rx_n - 5'd10) : rx_n;
+    wire [7:0]  rn_u  = 8'h30 + {4'd0, rn_u5[3:0]};
+    wire [47:0] rxh_chars = {"GOT ", rn_t, rn_u};
+    wire [31:0] st_chars  = link_ok ? "OK  " : (link_fail ? "FAIL" : "    ");
+    wire t_gh, t_gs, t_x0, t_x1, t_x2, t_x3, t_ghint;
+    text_line #(.N(6), .X0(0),  .Y0(0), .SCALE(1)) u_t_gh (.px(px), .py(py), .chars(rxh_chars), .on(t_gh));
+    text_line #(.N(4), .X0(66), .Y0(0), .SCALE(1)) u_t_gs (.px(px), .py(py), .chars(st_chars),  .on(t_gs));
+
+    // each row is 11 chars "AA BB CC DD" (88 bits); byte b shows only if b < rx_n
+    wire [351:0] rx_rows;
+    generate
+        for (r = 0; r < 4; r = r + 1) begin : g_rxr
+            for (j = 0; j < 4; j = j + 1) begin : g_rxb
+                assign rx_rows[r*88 + (10-3*j)*8 +: 8] =
+                    ((r*4+j) < rx_n) ? h2a(rx_log[(r*4+j)*8+4 +: 4]) : 8'h20;
+                assign rx_rows[r*88 + (9-3*j)*8 +: 8] =
+                    ((r*4+j) < rx_n) ? h2a(rx_log[(r*4+j)*8 +: 4]) : 8'h20;
+                if (j < 3) begin : g_sp
+                    assign rx_rows[r*88 + (8-3*j)*8 +: 8] = 8'h20;
+                end
+            end
+        end
+    endgenerate
+    text_line #(.N(11), .X0(15), .Y0(11), .SCALE(1)) u_t_x0 (.px(px), .py(py), .chars(rx_rows[0*88 +: 88]), .on(t_x0));
+    text_line #(.N(11), .X0(15), .Y0(21), .SCALE(1)) u_t_x1 (.px(px), .py(py), .chars(rx_rows[1*88 +: 88]), .on(t_x1));
+    text_line #(.N(11), .X0(15), .Y0(31), .SCALE(1)) u_t_x2 (.px(px), .py(py), .chars(rx_rows[2*88 +: 88]), .on(t_x2));
+    text_line #(.N(11), .X0(15), .Y0(41), .SCALE(1)) u_t_x3 (.px(px), .py(py), .chars(rx_rows[3*88 +: 88]), .on(t_x3));
+    text_line #(.N(12), .X0(12), .Y0(54), .SCALE(1)) u_t_gh2 (.px(px), .py(py), .chars("D:CLR R:BACK"), .on(t_ghint));
 
     //---------------------------------------------------------- colour for this pixel
     // priority mux: the first match wins
@@ -228,6 +282,12 @@ module ui_top(
                 else if (t_row1 | t_row2)  pdata = WHITE;
                 else if (t_mhint)          pdata = GREEN;
             end
+            S_RX: begin
+                if      (t_gh)                          pdata = YELLOW;
+                else if (t_gs)                          pdata = link_fail ? RED : GREEN;
+                else if (t_x0 | t_x1 | t_x2 | t_x3)     pdata = WHITE;
+                else if (t_ghint)                       pdata = GREEN;
+            end
         endcase
     end
 
@@ -240,5 +300,5 @@ module ui_top(
     assign JC[2] = 1'b0;
 
     //---------------------------------------------------------- LEDs
-    assign led = {msg_len, (note != 2'd0), dbg_en, m_left, digit, busy_i, has_ink, state};
+    assign led = {msg_len, (note != 2'd0), m_left, digit, busy_i, has_ink, state};
 endmodule

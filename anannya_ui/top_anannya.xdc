@@ -65,3 +65,7 @@ set_property CFGBVS VCCO [current_design]
 set_property BITSTREAM.GENERAL.COMPRESS TRUE [current_design]
 set_property BITSTREAM.CONFIG.CONFIGRATE 33 [current_design]
 set_property CONFIG_MODE SPIx4 [current_design]
+
+## UART link (JA1 = TX, JA2 = RX). Loopback needs no cable.
+set_property -dict { PACKAGE_PIN J1 IOSTANDARD LVCMOS33 } [get_ports JA_TX]
+set_property -dict { PACKAGE_PIN L2 IOSTANDARD LVCMOS33 PULLUP true } [get_ports JA_RX]
