@@ -25,13 +25,13 @@ module tb_ui_ctrl;
     reg p_submit = 0, p_confirm = 0, p_retry = 0, p_clear = 0, p_next = 0;
     reg busy_i = 0, pred_valid = 0, empty_i = 0;
     reg [3:0] pred = 0;
-    wire [1:0]  state;
+    wire [2:0]  state;
     wire [3:0]  digit;
     wire [15:0] msg;
     wire [4:0]  msg_len;
     wire [1:0]  note;
-    wire        submit_out, clear_out;
-    integer errors = 0, n_sub = 0, n_clr = 0, n_c;
+    wire        submit_out, clear_out, confirm_out, rx_clear_out;
+    integer errors = 0, n_sub = 0, n_clr = 0, n_conf = 0, n_rxc = 0, n_c;
 
     ui_ctrl #(.MAXLEN(4), .WAIT_TMO(24'd20)) dut (
         .clk(clk), .rst(rst),
@@ -39,12 +39,15 @@ module tb_ui_ctrl;
         .p_clear(p_clear), .p_next(p_next),
         .busy_i(busy_i), .pred_valid(pred_valid), .pred(pred), .empty_i(empty_i),
         .state(state), .digit(digit), .msg(msg), .msg_len(msg_len), .note(note),
-        .submit_out(submit_out), .clear_out(clear_out));
+        .submit_out(submit_out), .clear_out(clear_out),
+        .confirm_out(confirm_out), .rx_clear_out(rx_clear_out));
 
     always #5 clk = ~clk;
     always @(posedge clk) begin
-        if (submit_out) n_sub <= n_sub + 1;
-        if (clear_out)  n_clr <= n_clr + 1;
+        if (submit_out)   n_sub  <= n_sub + 1;
+        if (clear_out)    n_clr  <= n_clr + 1;
+        if (confirm_out)  n_conf <= n_conf + 1;
+        if (rx_clear_out) n_rxc  <= n_rxc + 1;
     end
 
     task step; begin @(posedge clk); #1; end endtask
@@ -92,6 +95,7 @@ module tb_ui_ctrl;
         expect("len after confirm", msg_len, 1);
         expect("first digit", msg[3:0], 7);
         expect("canvas cleared", n_clr, 1);
+        expect("confirm pulse", n_conf, 1);
 
         press(0);                                  // empty canvas
         empty_i = 1; step; empty_i = 0; step;
@@ -109,11 +113,13 @@ module tb_ui_ctrl;
         end
         expect("len full", msg_len, 4);
         expect("msg digits", msg, 16'h4327);
+        expect("confirm pulses so far", n_conf, 4);
 
         press(0); pred_pulse(9);                   // buffer full: confirm ignored
         press(1);
         expect("full: stay RESULT", state, 2);
         expect("full: len same",    msg_len, 4);
+        expect("full: no confirm pulse", n_conf, 4);
         press(2);                                  // retry
         expect("retry -> DRAW", state, 0);
 
@@ -122,6 +128,12 @@ module tb_ui_ctrl;
         press(3);                                  // clear message
         expect("msg cleared len", msg_len, 0);
         expect("msg cleared",     msg, 0);
+        expect("MSG clear: no rx clear", n_rxc, 0);
+        press(4);                                  // RX screen
+        expect("next -> RX", state, 4);
+        press(3);                                  // clear received log
+        expect("RX clear pulse", n_rxc, 1);
+        expect("RX clear stays in RX", state, 4);
         press(4);
         expect("next -> DRAW", state, 0);
 
