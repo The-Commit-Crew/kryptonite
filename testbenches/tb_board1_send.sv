@@ -15,7 +15,7 @@ module tb_board1_send;
     end
 
     initial begin
-        #250000;
+        #450000;
         $fatal(1, "Board 1 Send simulation timed out");
     end
 endmodule
@@ -27,9 +27,17 @@ module board1_send_case #(parameter FIXED_NOISE = 0) (
     logic rst = 1, send_req = 0, ciphertext_release = 0;
     logic [63:0] msg_in = 0;
     logic [4:0] msg_len_in = 0;
-    logic [9:0] ciphertext_addr = 0;
+    logic [9:0] readback_addr = 0;
+    wire [9:0] serializer_addr;
+    logic serializer_start = 0;
+    wire serializer_busy, serializer_done;
+    wire [9:0] ciphertext_addr = serializer_busy ? serializer_addr : readback_addr;
     wire busy, ciphertext_ready;
     wire [11:0] ciphertext_data;
+    wire [7:0] byte_data;
+    wire byte_valid, byte_last;
+    logic byte_ready = 0;
+    int streamed = 0;
 
     wire mul_wr_en, mul_start, mul_done;
     wire [7:0] mul_wr_addr, mul_rd_addr;
@@ -40,6 +48,7 @@ module board1_send_case #(parameter FIXED_NOISE = 0) (
     logic [11:0] expected [0:767];
     logic [7:0] reference_bytes [0:31];
     logic [11:0] captured [0:767];
+    logic [7:0] serialized [0:1535];
 
     always @(posedge clk) begin
         cycles_since_reset <= rst ? 0 : cycles_since_reset + 1;
@@ -61,6 +70,31 @@ module board1_send_case #(parameter FIXED_NOISE = 0) (
         .left_data(mul_left), .right_data(mul_right), .start(mul_start), .done(mul_done),
         .rd_addr(mul_rd_addr), .rd_data(mul_rd_data)
     );
+
+    ciphertext_serializer serializer (
+        .clk(clk), .rst(rst), .start(serializer_start), .busy(serializer_busy), .done(serializer_done),
+        .ciphertext_addr(serializer_addr), .ciphertext_data(ciphertext_data),
+        .byte_data(byte_data), .byte_valid(byte_valid), .byte_last(byte_last), .byte_ready(byte_ready)
+    );
+
+    always @(negedge clk)
+        byte_ready = !rst && cycles_since_reset % 5 < 3 && cycles_since_reset % 17 < 13;
+
+    always @(posedge clk) begin
+        if (serializer_start && !serializer_busy)
+            streamed = 0;
+        if (byte_valid && byte_ready) begin
+            if (streamed >= 1536 || byte_last !== (streamed == 1535))
+                $fatal(1, "Unexpected serializer stream length or last flag");
+            if (byte_data !== (streamed[0] ? {4'b0, captured[streamed / 2][11:8]}
+                                                            : captured[streamed / 2][7:0]))
+                $fatal(1, "Send serializer mismatch at byte %0d", streamed);
+            if (busy !== 1'b1 || ciphertext_ready !== 1'b1)
+                $fatal(1, "Ciphertext ownership ended before serialization finished");
+            serialized[streamed] = byte_data;
+            streamed++;
+        end
+    end
 
     task automatic run_send(input logic [63:0] digits, input string ascii, input int case_number);
         int count_before, seed, byte_index, bit_index;
@@ -92,7 +126,7 @@ module board1_send_case #(parameter FIXED_NOISE = 0) (
         @(negedge clk);
         send_req = 0;
         for (int i = 0; i < 768; i++) begin
-            ciphertext_addr = i[9:0];
+            readback_addr = i[9:0];
             @(posedge clk);
             #1;
             if (busy !== 1'b1 || ciphertext_ready !== 1'b1 || multiply_count != count_before + 6)
@@ -119,8 +153,18 @@ module board1_send_case #(parameter FIXED_NOISE = 0) (
             @(negedge clk);
         end
 
-        if ($test$plusargs("capture_send"))
+        serializer_start = 1;
+        @(negedge clk);
+        serializer_start = 0;
+        wait (serializer_done === 1'b1);
+        @(negedge clk);
+        if (streamed != 1536 || serializer_busy !== 1'b0 || ciphertext_ready !== 1'b1)
+            $fatal(1, "Send did not serialize all 1536 bytes before release");
+
+        if ($test$plusargs("capture_send")) begin
             $writememh($sformatf("board1_%0d_%0d_%0d.mem", FIXED_NOISE, case_number, seed), captured);
+            $writememh($sformatf("bytes_%0d_%0d_%0d.mem", FIXED_NOISE, case_number, seed), serialized);
+        end
         ciphertext_release = 1;
         @(negedge clk);
         ciphertext_release = 0;
