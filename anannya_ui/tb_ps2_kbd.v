@@ -108,45 +108,46 @@ module tb_ps2_kbd;
         rst = 0;
         wait_clks(50);
 
-        // ---- letters, Shift, digits ----
-        tap(8'h1C); settle;                                   expect_len(1, "a");        expect_char(0, "a", "a");
-        make(8'h12); tap(8'h32); brk(8'h12); settle;          expect_len(2, "Shift+B");  expect_char(1, "B", "Shift+B");
-        tap(8'h16); settle;                                   expect_len(3, "1");        expect_char(2, "1", "1");
-        make(8'h12); tap(8'h16); brk(8'h12); settle;          expect_len(4, "Shift+1");  expect_char(3, "!", "Shift+1");
-        tap(8'h29); settle;                                   expect_len(5, "space");    expect_char(4, " ", "space");
+        // ---- digits accepted, everything else ignored ----
+        tap(8'h1C); settle;                                   expect_len(0, "a ignored");
+        make(8'h12); tap(8'h32); brk(8'h12); settle;          expect_len(0, "Shift+B ignored");
+        tap(8'h16); settle;                                   expect_len(1, "1");        expect_char(0, "1", "1");
+        make(8'h12); tap(8'h16); brk(8'h12); settle;          expect_len(1, "Shift+1 (!) ignored");
+        tap(8'h29); settle;                                   expect_len(1, "space ignored");
+        tap(8'h1E); settle;                                   expect_len(2, "2");        expect_char(1, "2", "2");
 
         // ---- Backspace, right Shift, ignored keys ----
-        tap(8'h66); settle;                                   expect_len(4, "Backspace");
-        make(8'h59); tap(8'h4C); brk(8'h59); settle;          expect_len(5, "RShift+;");  expect_char(4, ":", "RShift+;");
-        tap(8'h4C); settle;                                   expect_len(5, "; alone ignored");   // also proves Shift was released
+        tap(8'h66); settle;                                   expect_len(1, "Backspace");
+        make(8'h59); tap(8'h4C); brk(8'h59); settle;          expect_len(1, "RShift+; ignored");
+        tap(8'h4C); settle;                                   expect_len(1, "; alone ignored");
         ps2_byte(8'hE0, 1'b1); ps2_byte(8'h75, 1'b1);                                             // extended key (arrow)
         ps2_byte(8'hE0, 1'b1); ps2_byte(8'hF0, 1'b1); ps2_byte(8'h75, 1'b1); settle;
-                                                              expect_len(5, "extended key ignored");
-        ps2_byte(8'hFA, 1'b1); ps2_byte(8'hAA, 1'b1); settle; expect_len(5, "power-on codes ignored");
+                                                              expect_len(1, "extended key ignored");
+        ps2_byte(8'hFA, 1'b1); ps2_byte(8'hAA, 1'b1); settle; expect_len(1, "power-on codes ignored");
 
         // ---- bad parity, cut-off frame ----
         e0 = n_err;
         ps2_byte(8'h1C, 1'b0); settle;
         if (n_err !== e0 + 1) begin errors = errors + 1; $display("FAIL: bad parity not reported"); end
-        expect_len(5, "bad parity ignored");
+        expect_len(1, "bad parity ignored");
         ps2_bits({1'b1, ~(^8'h1C), 8'h1C, 1'b0}, 5);         // only 5 of 11 bits, then silence
         wait_clks(2*TMO);
-        tap(8'h21); settle;                                   expect_len(6, "after cut-off frame");  expect_char(5, "c", "after cut-off frame");
+        tap(8'h26); settle;                                   expect_len(2, "after cut-off frame");  expect_char(1, "3", "after cut-off frame");
 
         // ---- Tab, Enter, Esc ----
-        tap(8'h0D); settle;                                   expect_len(6, "Tab changes nothing");
+        tap(8'h0D); settle;                                   expect_len(2, "Tab changes nothing");
         expect_sends(0, "no send yet");
         tap(8'h5A); settle;                                   expect_sends(1, "Enter sends");
-        expect_len(6, "text stays after Enter");
+        expect_len(2, "text stays after Enter");
         tap(8'h76); settle;                                   expect_len(0, "Esc clears");
         tap(8'h5A); settle;                                   expect_sends(1, "Enter on empty does nothing");
         tap(8'h66); settle;                                   expect_len(0, "Backspace on empty");
 
         // ---- full buffer: 18 keys, only 16 fit ----
-        for (k = 0; k < 18; k = k + 1) tap(8'h22);
+        for (k = 0; k < 18; k = k + 1) tap(8'h3D);            // key 7
         settle;
         expect_len(16, "full buffer");
-        if (msg !== {16{8'h78}}) begin errors = errors + 1; $display("FAIL: full buffer contents %h", msg); end
+        if (msg !== {16{8'h37}}) begin errors = errors + 1; $display("FAIL: full buffer contents %h", msg); end
 
         if (errors == 0) $display("PASS: tb_ps2_kbd");
         else             $display("FAIL: tb_ps2_kbd, %0d errors", errors);
