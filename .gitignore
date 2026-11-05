@@ -30,3 +30,8 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# --- Local FPGA key material (Board 1 public files can be tracked) ---
+/crypto/keys/*
+!/crypto/keys/board1/
+/crypto/.keygen-*/
