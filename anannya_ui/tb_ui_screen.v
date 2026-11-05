@@ -4,12 +4,10 @@ module tb_ui_screen;
     reg [5:0] py = 0;
     reg [2:0] state = 0;
     reg [3:0] digit = 0;
-    reg [63:0] msg = 0, rmsg = 0;
-    reg [4:0] msg_len = 0, rmsg_len = 0;
-    reg role_rx = 0;
+    reg [127:0] msg = 0, rx_log = 0;
+    reg [4:0] msg_len = 0, rx_n = 0;
+    reg rx_hex = 0, role_kb = 0, blink = 0;
     reg [1:0] note = 0;
-    reg [127:0] rx_log = 0;
-    reg [4:0] rx_n = 0;
     reg link_ok = 0, link_fail = 0;
     reg [6:0] cur_x = 50;
     reg [5:0] cur_y = 30;
@@ -18,15 +16,15 @@ module tb_ui_screen;
     reg [5:0] bymin = 10, bymax = 20;
     wire [15:0] pdata;
     integer errors = 0;
-    integer n, n7, n1;
+    integer n, n7, n1, na, nb;
 
     localparam WHITE = 16'hFFFF, BLACK = 16'h0000, RED = 16'hF800,
                GREEN = 16'h07E0, CYAN = 16'h07FF, YELLOW = 16'hFFE0;
 
     ui_screen #(.MAXLEN(16)) dut (
         .px(px), .py(py), .state(state), .digit(digit),
-        .msg(msg), .msg_len(msg_len), .rmsg(rmsg), .rmsg_len(rmsg_len),
-        .role_rx(role_rx), .note(note), .rx_log(rx_log), .rx_n(rx_n),
+        .msg(msg), .msg_len(msg_len), .rx_log(rx_log), .rx_n(rx_n),
+        .rx_hex(rx_hex), .role_kb(role_kb), .blink(blink), .note(note),
         .link_ok(link_ok), .link_fail(link_fail),
         .cur_x(cur_x), .cur_y(cur_y), .oink(oink), .has_ink(has_ink),
         .bxmin(bxmin), .bxmax(bxmax), .bymin(bymin), .bymax(bymax),
@@ -115,58 +113,96 @@ module tb_ui_screen;
         //================================================ RESULT
         state = 2; digit = 7; msg_len = 3;
         tally(38, 61, 10, 37, WHITE, n7); must_have("big 7", n7);
-        tally(12, 83, 48, 54, GREEN, n);  must_have("hint green", n);
-        tally(12, 83, 48, 54, RED, n);    must_not("hint not red", n);
         digit = 1;
         tally(38, 61, 10, 37, WHITE, n1); must_have("big 1", n1);
         if (n7 == n1) begin errors = errors + 1; $display("FAIL: digit 7 and 1 look the same"); end
+        tally(0, 95, 54, 60, GREEN, n);   must_have("RESULT hint green", n);
+        tally(0, 95, 54, 60, RED, n);     must_not("RESULT hint not red", n);
         msg_len = 16;
-        tally(12, 83, 48, 54, RED, n);    must_have("FULL hint red", n);
-        tally(12, 83, 48, 54, GREEN, n);  must_not("FULL not green", n);
+        tally(0, 95, 54, 60, RED, n);     must_have("RESULT FULL hint red", n);
+        tally(0, 95, 54, 60, GREEN, n);   must_not("RESULT FULL not green", n);
 
-        //================================================ MSG, sender role
-        state = 3; role_rx = 0; msg = 64'h973; msg_len = 3;
-        rmsg = 0; rmsg_len = 0; link_ok = 0; link_fail = 0;
-        tally(0, 35, 14, 27, WHITE, n);   must_have("row1 digits", n);
-        tally(48, 95, 14, 27, WHITE, n);  must_not("row1 empty slots", n);
-        tally(0, 95, 32, 45, WHITE, n);   must_not("row2 empty", n);
-        tally(0, 35, 0, 6, YELLOW, n);    must_have("MSG header", n);
+        //================================================ MSG (mouse board, our digits as ASCII)
+        state = 3; msg = {104'd0, "3", "2", "1"}; msg_len = 3;
+        link_ok = 0; link_fail = 0;
+        tally(0, 41, 0, 6, YELLOW, n);    must_have("MSG header", n);
+        tally(0, 35, 14, 27, WHITE, n);   must_have("MSG row1 chars", n);
+        tally(48, 95, 14, 27, WHITE, n);  must_not("MSG row1 empty slots", n);
+        tally(0, 95, 32, 45, WHITE, n);   must_not("MSG row2 empty", n);
         tally(0, 95, 54, 60, GREEN, n);   must_have("MSG hint", n);
-        tally(66, 89, 0, 6, GREEN, n);    must_not("no status green", n);
-        tally(66, 89, 0, 6, RED, n);      must_not("no status red", n);
+        tally(66, 89, 0, 6, GREEN, n);    must_not("MSG no status green", n);
+        tally(66, 89, 0, 6, RED, n);      must_not("MSG no status red", n);
         link_ok = 1;
-        tally(66, 89, 0, 6, GREEN, n);    must_have("OK green", n);
-        tally(66, 89, 0, 6, RED, n);      must_not("OK not red", n);
+        tally(66, 89, 0, 6, GREEN, n);    must_have("MSG OK green", n);
+        tally(66, 89, 0, 6, RED, n);      must_not("MSG OK not red", n);
         link_ok = 0; link_fail = 1;
-        tally(66, 89, 0, 6, RED, n);      must_have("FAIL red", n);
-        tally(66, 89, 0, 6, GREEN, n);    must_not("FAIL not green", n);
+        tally(66, 89, 0, 6, RED, n);      must_have("MSG FAIL red", n);
+        tally(66, 89, 0, 6, GREEN, n);    must_not("MSG FAIL not green", n);
         link_fail = 0;
-        msg = 64'hFEDCBA9876543210; msg_len = 16;
-        tally(0, 95, 32, 45, WHITE, n);   must_have("row2 full", n);
+        msg = {16{8'h58}}; msg_len = 16;
+        tally(0, 95, 32, 45, WHITE, n);   must_have("MSG row2 full", n);
+        // lower case draws exactly like upper case
+        msg = {120'd0, "a"}; msg_len = 1;
+        tally(0, 11, 14, 27, WHITE, na);
+        msg = {120'd0, "A"};
+        tally(0, 11, 14, 27, WHITE, nb);
+        must_have("letter drawn", na);
+        if (na != nb) begin errors = errors + 1; $display("FAIL: 'a' and 'A' look different"); end
 
-        //================================================ MSG, receiver role
-        role_rx = 1; msg_len = 3; msg = 64'h973; rmsg = 0; rmsg_len = 0;
-        tally(0, 95, 14, 27, WHITE, n);   must_not("rx role: nothing yet", n);
-        rmsg = 64'h15; rmsg_len = 2;
-        tally(0, 23, 14, 27, WHITE, n);   must_have("rx role: 2 digits", n);
-        tally(36, 95, 14, 27, WHITE, n);  must_not("rx role: rest empty", n);
-        role_rx = 0;
+        //================================================ COMPOSE (keyboard board)
+        state = 5; role_kb = 1; blink = 1;
+        msg = {112'd0, "I", "H"}; msg_len = 2;
+        tally(0, 41, 0, 6, YELLOW, n);    must_have("COMPOSE header", n);
+        tally(0, 23, 14, 27, WHITE, n);   must_have("COMPOSE text", n);
+        tally(36, 95, 14, 27, WHITE, n);  must_not("COMPOSE rest empty", n);
+        tally(0, 95, 54, 60, GREEN, n);   must_have("COMPOSE hint", n);
+        tally(24, 33, 28, 29, CYAN, n);   if (n != 20) begin errors = errors + 1; $display("FAIL: cursor underline = %0d pixels, want 20", n); end
+        tally(0, 95, 28, 29, CYAN, n);    if (n != 20) begin errors = errors + 1; $display("FAIL: stray cursor pixels (%0d)", n); end
+        blink = 0;
+        tally(0, 95, 28, 29, CYAN, n);    must_not("cursor off when blink=0", n);
+        blink = 1;
+        msg = {16{8'h58}}; msg_len = 10;  // second row, third slot
+        tally(24, 33, 46, 47, CYAN, n);   must_have("cursor on row 2", n);
+        tally(0, 95, 28, 29, CYAN, n);    must_not("no cursor on row 1", n);
+        msg_len = 16;
+        tally(0, 95, 28, 29, CYAN, n);    must_not("no cursor when full (row 1)", n);
+        tally(0, 95, 46, 47, CYAN, n);    must_not("no cursor when full (row 2)", n);
+        link_ok = 1;
+        tally(66, 89, 0, 6, GREEN, n);    must_have("COMPOSE OK green", n);
+        link_ok = 0;
+        role_kb = 0;
 
-        //================================================ RX screen
-        state = 4; rx_n = 0; rx_log = 0;
-        tally(15, 80, 11, 48, WHITE, n);  must_not("RX empty log", n);
-        rx_log[7:0] = 8'h03; rx_log[15:8] = 8'h07; rx_log[23:16] = 8'h09;
-        rx_n = 3;
-        tally(15, 80, 11, 17, WHITE, n);  must_have("RX row 0", n);
-        tally(15, 80, 21, 27, WHITE, n);  must_not("RX row 1 empty", n);
+        //================================================ RX
+        state = 4; rx_n = 0; rx_log = 0; rx_hex = 0;
+        tally(0, 41, 0, 6, YELLOW, n);    must_have("RX header", n);
+        tally(0, 95, 11, 48, WHITE, n);   must_not("RX empty (text)", n);
+        rx_hex = 1;
+        tally(0, 95, 11, 48, WHITE, n);   must_not("RX empty (hex)", n);
+        rx_log = {104'd0, "!", "I", "H"}; rx_n = 3;
+        rx_hex = 0;
+        tally(0, 35, 14, 27, WHITE, n);   must_have("RX text row 1", n);
+        tally(0, 95, 32, 47, WHITE, n);   must_not("RX text: nothing below", n);
+        rx_hex = 1;
+        tally(15, 80, 11, 17, WHITE, n);  must_have("RX hex row 0", n);
+        tally(0, 95, 32, 47, WHITE, n);   must_not("RX hex: rows 2 and 3 empty", n);
         rx_log = {16{8'hA5}}; rx_n = 16;
-        tally(15, 80, 41, 47, WHITE, n);  must_have("RX row 3", n);
-        tally(0, 35, 0, 6, YELLOW, n);    must_have("RX header", n);
-        tally(12, 83, 54, 60, GREEN, n);  must_have("RX hint", n);
+        tally(15, 80, 41, 47, WHITE, n);  must_have("RX hex row 3", n);
+        rx_hex = 0; rx_log = {16{8'h4D}};
+        tally(0, 95, 32, 45, WHITE, n);   must_have("RX text row 2", n);
+        tally(0, 95, 54, 60, GREEN, n);   must_have("RX hint (mouse board)", n);
+        role_kb = 1;
+        tally(0, 95, 54, 60, GREEN, n);   must_have("RX hint (keyboard board)", n);
+        role_kb = 0;
         link_ok = 1;
         tally(66, 89, 0, 6, GREEN, n);    must_have("RX OK green", n);
         link_ok = 0; link_fail = 1;
         tally(66, 89, 0, 6, RED, n);      must_have("RX FAIL red", n);
+        link_fail = 0;
+
+        //================================================ unused states stay blank
+        state = 6;
+        px_is("state 6 blank", 10, 10, BLACK);
+        px_is("state 6 blank 2", 50, 30, BLACK);
 
         if (errors == 0) $display("PASS: tb_ui_screen");
         else             $display("FAIL: tb_ui_screen, %0d errors", errors);

@@ -2,16 +2,19 @@
 
 //////////////////////////////////////////////////////////////////////////////////
 //  FILL IN THE FOLLOWING INFORMATION:
-//  STUDENT A NAME: 
-//  STUDENT B NAME:
-//  STUDENT C NAME: 
-//  STUDENT D NAME:
+//  STUDENT A NAME: Balakrishnan Shrikkanth
+//  STUDENT B NAME: Madnani Khushi
+//  STUDENT C NAME: Garg Divyansh
+//  STUDENT D NAME: Madhu Kumar Anannya
 //////////////////////////////////////////////////////////////////////////////////
 
 // Integration top. Port names match the master .xdc.
 //   JA[0] = our TX (JA1), JA[1] = our RX (JA2)
-//   sw[15] reset, sw[14] debug, sw[13] role (0 sender / 1 receiver), sw[11:8] debug digit,
-//   sw[4] loopback, sw[1:0] brush
+//   sw[15] reset, sw[14] debug, sw[13] board role (0 = MOUSE board, 1 = KEYBOARD board),
+//   sw[11:8] debug digit, sw[4] loopback, sw[2] RX screen: 1 = text / 0 = hex, sw[1:0] brush
+//   After changing sw[13], press reset (sw[15]).
+//   KEYBOARD board: type to compose, Enter = send, Esc = clear, Backspace = delete,
+//                   Tab = COMPOSE -> RX text -> RX hex -> COMPOSE, btnD = clear received
 module My_Top_Module (
     input  clk,
     input  [15:0] sw,
@@ -24,11 +27,18 @@ module My_Top_Module (
 );
     localparam MAXLEN = 16;
 
-    //---------------------------------------------------------- reset: sw[15], role: sw[13]
+    //---------------------------------------------------------- reset, role, blink
     reg [1:0] rs = 2'b00;
     always @(posedge clk) rs <= {rs[0], sw[15]};
     wire rst = rs[1];
-    wire role_rx = sw[13];                 // 0 = sender, 1 = receiver (read live)
+
+    reg [1:0] rk = 2'b00;                  // sw[13] through a 2-FF synchroniser
+    always @(posedge clk) rk <= {rk[0], sw[13]};
+    wire role_kb = rk[1];                  // 1 = keyboard board
+
+    reg [25:0] bcnt = 26'd0;
+    always @(posedge clk) bcnt <= bcnt + 26'd1;
+    wire blink = bcnt[25];                 // about 3 Hz
 
     //---------------------------------------------------------- buttons
     wire p_submit, p_confirm, p_retry, p_clear, p_next;
@@ -38,12 +48,12 @@ module My_Top_Module (
     debounce d_d (.clk(clk), .btn(btnD), .level(), .pulse(p_clear));
     debounce d_r (.clk(clk), .btn(btnR), .level(), .pulse(p_next));
 
-    //---------------------------------------------------------- mouse (from top_khushi)
+    //---------------------------------------------------------- mouse (held in reset on the keyboard board)
     wire [11:0] xpos, ypos;
     wire [3:0]  zpos;
     wire        m_left, m_mid, m_right, m_new;
     MouseCtl u_mouse (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst | role_kb),
         .xpos(xpos), .ypos(ypos), .zpos(zpos),
         .left(m_left), .middle(m_mid), .right(m_right), .new_event(m_new),
         .value(12'd0), .setx(1'b0), .sety(1'b0), .setmax_x(1'b0), .setmax_y(1'b0),
@@ -61,7 +71,39 @@ module My_Top_Module (
     always @(posedge clk) mid_q <= m_mid;
     wire mid_pulse = m_mid & ~mid_q;
 
-    //---------------------------------------------------------- UI state machine
+    //---------------------------------------------------------- keyboard path (only listens on the keyboard board)
+    wire [7:0] kb_code;
+    wire       kb_valid, kb_err;
+    ps2_kbd_rx u_kbrx (
+        .clk(clk), .rst(rst | ~role_kb),
+        .ps2_clk(PS2Clk), .ps2_data(PS2Data),
+        .data(kb_code), .valid(kb_valid), .err(kb_err));
+
+    wire [7:0] kb_key;
+    wire       kb_key_v;
+    kbd_decode u_kdec (
+        .clk(clk), .rst(rst | ~role_kb),
+        .code(kb_code), .code_valid(kb_valid),
+        .key(kb_key), .key_valid(kb_key_v));
+
+    wire [MAXLEN*8-1:0] ed_msg;
+    wire [4:0]          ed_len;
+    wire                ed_send;
+    msg_edit #(.MAXLEN(MAXLEN)) u_edit (
+        .clk(clk), .rst(rst | ~role_kb),
+        .key(kb_key), .key_valid(kb_key_v),
+        .msg(ed_msg), .len(ed_len), .send(ed_send));
+
+    // keyboard board views: 0 = COMPOSE, 1 = RX text, 2 = RX hex (Tab cycles)
+    reg [1:0] kb_view = 2'd0;
+    always @(posedge clk) begin
+        if (rst | ~role_kb)
+            kb_view <= 2'd0;
+        else if (kb_key_v && kb_key == 8'h09)
+            kb_view <= (kb_view == 2'd2) ? 2'd0 : kb_view + 2'd1;
+    end
+
+    //---------------------------------------------------------- UI state machine (mouse board)
     wire [2:0]  state;
     wire [3:0]  digit;
     wire [MAXLEN*4-1:0] msg;
@@ -109,33 +151,56 @@ module My_Top_Module (
 
     wire in_draw = (state == 3'd0);
 
+    //---------------------------------------------------------- the message that is shown and sent
+    // mouse board: the confirmed digits become the characters '0'..'9' ('A'..'F' if ever > 9)
+    function [7:0] h2a;
+        input [3:0] h;
+        begin
+            h2a = (h <= 4'd9) ? (8'h30 + {4'd0, h}) : (8'h37 + {4'd0, h});
+        end
+    endfunction
+
+    wire [MAXLEN*8-1:0] dmsg;
+    genvar gi;
+    generate
+        for (gi = 0; gi < MAXLEN; gi = gi + 1) begin : g_conv
+            assign dmsg[gi*8 +: 8] = (gi < msg_len) ? h2a(msg[gi*4 +: 4]) : 8'h00;
+        end
+    endgenerate
+
+    wire [MAXLEN*8-1:0] out_msg = role_kb ? ed_msg : dmsg;
+    wire [4:0]          out_len = role_kb ? ed_len : msg_len;
+
     //---------------------------------------------------------- message layer + UART
     wire [MAXLEN*8-1:0] rx_log;
     wire [4:0]          rx_n;
-    wire [MAXLEN*4-1:0] rmsg;
-    wire [4:0]          rmsg_len;
     wire                link_ok, link_fail, link_busy;
     wire                ja_tx;
 
-    // SEND = btnC while on the MESSAGE screen (sender role only)
-    wire send_req   = p_confirm & (state == 3'd3) & ~role_rx;
-    // receiver role: btnD on the MESSAGE screen clears the received message
-    wire rx_clr_all = ctrl_rxclr | (p_clear & (state == 3'd3) & role_rx);
+    // SEND: keyboard board = Enter, mouse board = btnC on the MESSAGE screen
+    wire send_req   = role_kb ? ed_send : (p_confirm & (state == 3'd3));
+    // btnD on the RX screen (mouse board) or anywhere on the keyboard board clears the received message
+    wire rx_clr_all = ctrl_rxclr | (role_kb & p_clear);
 
     top_fsm #(.MAXLEN(MAXLEN)) u_fsm (
         .clk(clk), .rst(rst), .loopback(sw[4]),
         .rx_pin(JA[1]), .tx_pin(ja_tx),
-        .send_req(send_req), .msg_in(msg), .msg_len_in(msg_len),
+        .send_req(send_req), .msg_in(out_msg), .msg_len_in(out_len),
         .rx_clear(rx_clr_all),
         .send_ok(link_ok), .send_fail(link_fail), .tx_busy(link_busy),
-        .rx_log(rx_log), .rx_n(rx_n), .rmsg(rmsg), .rmsg_len(rmsg_len));
+        .rx_log(rx_log), .rx_n(rx_n));
 
     // JA is inout in the master naming: drive pin 0 as TX, pin 1 stays an input
     assign JA[0] = ja_tx;
 
     //---------------------------------------------------------- vision + ML (Shrikkanth/Khushi)
+    wire [12:0] pix;
+    wire [6:0]  px;
+    wire [5:0]  py;
     wire [6:0] ox;
     wire [5:0] oy;
+    assign ox = px;
+    assign oy = py;
     vision_ml u_vml (
         .clk(clk), .rst(rst),
         .cursor_x(cur_x), .cursor_y(cur_y),
@@ -158,21 +223,18 @@ module My_Top_Module (
         cdiv <= cdiv + 3'd1;
         if (cdiv == 3'd7) clk6p25 <= ~clk6p25;      // 100 MHz / 16 = 6.25 MHz
     end
-
-    wire [12:0] pix;
-    wire [6:0]  px;
-    wire [5:0]  py;
     pix_to_xy u_p2xy (.pix(pix), .x(px), .y(py));
-    assign ox = px;
-    assign oy = py;
 
     //---------------------------------------------------------- the renderer
+    wire [2:0] scr_state = role_kb ? ((kb_view == 2'd0) ? 3'd5 : 3'd4) : state;
+    wire       rx_hex    = role_kb ? (kb_view == 2'd2) : ~sw[2];   // mouse board: sw[2] up = text
+
     wire [15:0] pdata;
     ui_screen #(.MAXLEN(MAXLEN)) u_screen (
-        .px(px), .py(py), .state(state), .digit(digit),
-        .msg(msg), .msg_len(msg_len), .rmsg(rmsg), .rmsg_len(rmsg_len),
-        .role_rx(role_rx), .note(note),
-        .rx_log(rx_log), .rx_n(rx_n),
+        .px(px), .py(py), .state(scr_state), .digit(digit),
+        .msg(out_msg), .msg_len(out_len),
+        .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
+        .role_kb(role_kb), .blink(blink), .note(note),
         .link_ok(link_ok), .link_fail(link_fail),
         .cur_x(cur_x), .cur_y(cur_y),
         .oink(oink), .has_ink(has_ink),
@@ -188,6 +250,6 @@ module My_Top_Module (
     assign JC[2] = 1'b0;
 
     //---------------------------------------------------------- LEDs
-    // [15:11] msg_len  [10] note  [9] left click  [8:5] digit  [4] busy  [3] has_ink  [2:0] state
-    assign led = {msg_len, (note != 2'd0), m_left, digit, busy_i, has_ink, state};
+    // [15:11] message length  [10] note  [9] left click  [8:5] digit  [4] busy  [3] has_ink  [2:0] state
+    assign led = {out_len, (note != 2'd0), m_left, digit, busy_i, has_ink, state};
 endmodule
