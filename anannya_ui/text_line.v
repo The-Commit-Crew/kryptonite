@@ -20,17 +20,17 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module text_line(
+module text_line #(
+    parameter N = 1,       // number of characters
+    parameter X0 = 0,      // top-left corner on screen
+    parameter Y0 = 0,
+    parameter SCALE = 1    // 1 = 5x7 pixels, 2 = 10x14, ...
+)(
     input  wire [6:0]     px,
     input  wire [5:0]     py,
     input  wire [N*8-1:0] chars,    // first character in the top byte
     output wire           on
     );
-    
-    parameter N = 1;    // number of characters
-    parameter X0 = 0;    // top-left corner on screen
-    parameter Y0 = 0;
-    parameter SCALE = 1;     // 1 = 5x7 pixels, 2 = 10x14, ...
     
     localparam PITCH = 6 * SCALE;   // 5 pixel glyph + 1 pixel gap, scaled
     localparam W     = N * PITCH;
