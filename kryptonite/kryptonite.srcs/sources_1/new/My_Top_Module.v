@@ -15,6 +15,15 @@
 //   After changing sw[13], press reset (sw[15]).
 //   KEYBOARD board: type to compose, Enter = send, Esc = clear, Backspace = delete,
 //                   Tab = COMPOSE -> RX text -> RX hex -> COMPOSE, btnD = clear received
+//   Khushi's additions:
+//     sw[3] up = effects off, sw[5] = decrypt reveal style (0 scramble / 1 particles)
+//     btnU on RX replays the reveal; btnU on MSG / COMPOSE corrupts the next packet
+//     (demo of the automatic re-send). 7-segment cycles the link counters
+//     S (sent) r (received) E (errors) n (re-sends) every 2 s.
+//     sw[6] up = ciphertext test: the send button sends the test ciphertext
+//     (12 x 128-byte packets) instead; the receiving board rebuilds it and checks
+//     it. LEDs then show [15:4] fragments received, [3] sending, [2] all sent,
+//     [1] check PASS, [0] check FAIL or send gave up.
 module My_Top_Module #(
     parameter ENCRYPT_SEND = 1'b1,
     parameter SIM_MULTIPLIER = 1'b0,
@@ -33,7 +42,10 @@ module My_Top_Module #(
     inout  [1:0]  JA,
     output [7:0]  JC,           // Pmod OLED
     inout  PS2Clk,
-    inout  PS2Data
+    inout  PS2Data,
+    output [6:0]  seg,          // 7-segment link stats
+    output [3:0]  an,
+    output        dp
 );
     localparam MAXLEN = 16;
 
@@ -188,10 +200,22 @@ module My_Top_Module #(
     wire                ja_tx;
 
     // SEND: keyboard board = Enter, mouse board = btnC on the MESSAGE screen
-    wire send_req   = role_kb ? ed_send : (p_confirm & (state == 3'd3));
+    wire send_btn   = role_kb ? ed_send : (p_confirm & (state == 3'd3));
+    wire ct_mode    = sw[6];                       // ciphertext test mode (Khushi)
+    wire send_req   = send_btn & ~ct_mode;
+    wire ct_test_send = send_btn & ct_mode;
     wire retry_req = p_retry & (role_kb || state == 3'd3);
     // btnD on the RX screen (mouse board) or anywhere on the keyboard board clears the received message
     wire rx_clr_all = ctrl_rxclr | (role_kb & p_clear);
+
+    // btnU on the MSG / COMPOSE screen: corrupt the next packet (demo of the re-send)
+    wire        fault_req = p_submit & (role_kb ? (kb_view == 2'd0) : (state == 3'd3));
+    wire        rx_new;
+    wire [11:0] c_sent, c_recv, c_err, c_retry;
+    // ciphertext test sender / receiver <-> top_fsm (cipher_link is below)
+    wire        ct_busy, ct_we, ct_send, lk_busy, lk_done, lk_fail, lk_rxv;
+    wire [6:0]  ct_wa, ct_ra;
+    wire [7:0]  ct_wd, ct_len, ct_type, lk_rtype, lk_rlen, lk_rd;
 
     wire mul_wr_en, mul_start, mul_done;
     wire [7:0] mul_wr_addr, mul_rd_addr;
@@ -208,7 +232,45 @@ module My_Top_Module #(
         .rx_log(rx_log), .rx_n(rx_n),
         .retry_req(retry_req), .mul_wr_en(mul_wr_en), .mul_wr_addr(mul_wr_addr),
         .mul_left(mul_left), .mul_right(mul_right), .mul_start(mul_start), .mul_done(mul_done),
-        .mul_rd_addr(mul_rd_addr), .mul_rd_data(mul_rd_data));
+        .mul_rd_addr(mul_rd_addr), .mul_rd_data(mul_rd_data),
+        .fault_inject(fault_req), .rx_new(rx_new),
+        .cnt_sent(c_sent), .cnt_recv(c_recv), .cnt_err(c_err), .cnt_retry(c_retry),
+        .ct_busy(ct_busy), .ct_we(ct_we), .ct_wa(ct_wa), .ct_wd(ct_wd), .ct_len(ct_len),
+        .ct_type(ct_type), .ct_send(ct_send),
+        .lk_busy(lk_busy), .lk_done(lk_done), .lk_fail(lk_fail),
+        .ct_ra(ct_ra), .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen), .lk_rd(lk_rd));
+
+    //---------------------------------------------------------- ciphertext receive + test sender (Khushi)
+    // Board 2 side: rebuild the 12 x 128-byte ciphertext packets into 768 words.
+    // ct_dec_* is the read port for the decryptor.
+    wire [11:0] ct_rx_mask;
+    wire        ct_tx_ok, ct_tx_bad, ct_ready, ct_new, ct_pass, ct_fail;
+    wire [9:0]  ct_mism;
+    wire [9:0]  ct_dec_addr = 10'd0;               // decryptor connects here
+    wire [11:0] ct_dec_data;
+    cipher_link u_ct (
+        .clk(clk), .rst(rst), .test_send(ct_test_send), .clear(rx_clr_all),
+        .tx_ok(ct_tx_ok), .tx_bad(ct_tx_bad),
+        .rx_mask(ct_rx_mask), .ct_ready(ct_ready), .ct_new(ct_new),
+        .chk_pass(ct_pass), .chk_fail(ct_fail), .chk_mismatch(ct_mism),
+        .dec_addr(ct_dec_addr), .dec_data(ct_dec_data),
+        .ct_busy(ct_busy), .ct_we(ct_we), .ct_wa(ct_wa), .ct_wd(ct_wd), .ct_len(ct_len),
+        .ct_type(ct_type), .ct_send(ct_send),
+        .lk_busy(lk_busy), .lk_done(lk_done), .lk_fail(lk_fail),
+        .ct_ra(ct_ra), .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen), .lk_rd(lk_rd));
+
+    //---------------------------------------------------------- 7-segment link stats (Khushi)
+    // cycles S -> r -> E -> n every 2 seconds, no button needed
+    reg [27:0] seg_tmr = 28'd0;
+    reg        seg_next = 1'b0;
+    always @(posedge clk) begin
+        seg_next <= 1'b0;
+        if (seg_tmr == 28'd199_999_999) begin seg_tmr <= 28'd0; seg_next <= 1'b1; end
+        else seg_tmr <= seg_tmr + 28'd1;
+    end
+    seg7_stats u_seg (.clk(clk), .rst(rst), .next(seg_next),
+                      .cnt_sent(c_sent), .cnt_recv(c_recv), .cnt_err(c_err), .cnt_retry(c_retry),
+                      .seg(seg), .an(an), .dp(dp));
 
     // shared_poly_multiplier is the hardware boundary for the teammate's module.
     // It must implement this normal-form interface or provide an adapter to it.
@@ -240,7 +302,8 @@ module My_Top_Module #(
     wire [5:0]  py;
     wire [6:0] ox;
     wire [5:0] oy;
-    assign ox = px;
+    wire [6:0] px_w;                       // x shifted by the slide-in effect
+    assign ox = px_w;                      // the canvas slides with the screen
     assign oy = py;
     vision_ml u_vml (
         .clk(clk), .rst(rst),
@@ -270,9 +333,9 @@ module My_Top_Module #(
     wire [2:0] scr_state = role_kb ? ((kb_view == 2'd0) ? 3'd5 : 3'd4) : state;
     wire       rx_hex    = role_kb ? (kb_view == 2'd2) : ~sw[2];   // mouse board: sw[2] up = text
 
-    wire [15:0] pdata;
+    wire [15:0] ui_pdata, pdata;
     ui_screen #(.MAXLEN(MAXLEN)) u_screen (
-        .px(px), .py(py), .state(scr_state), .digit(digit),
+        .px(px_w), .py(py), .state(scr_state), .digit(digit),
         .msg(out_msg), .msg_len(out_len),
         .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
         .role_kb(role_kb), .blink(blink), .note(note),
@@ -280,7 +343,17 @@ module My_Top_Module #(
         .cur_x(cur_x), .cur_y(cur_y),
         .oink(oink), .has_ink(has_ink),
         .bxmin(bxmin), .bxmax(bxmax), .bymin(bymin), .bymax(bymax),
-        .pdata(pdata));
+        .pdata(ui_pdata));
+
+    //---------------------------------------------------------- effects on top (Khushi)
+    fx_engine #(.MAXLEN(MAXLEN)) u_fx (
+        .clk(clk), .rst(rst), .en(~sw[3]), .style(sw[5]),
+        .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
+        .state(scr_state), .digit(digit),
+        .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
+        .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel(sw[1:0]),
+        .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new),
+        .replay(p_submit & (scr_state == 3'd4)));
 
     Oled_Display u_oled (
         .clk(clk6p25), .reset(rst),
@@ -292,5 +365,7 @@ module My_Top_Module #(
 
     //---------------------------------------------------------- LEDs
     // [15:11] message length  [10] note  [9] left click  [8:5] digit  [4] busy  [3] has_ink  [2:0] state
-    assign led = {out_len, (note != 2'd0), m_left, digit, (busy_i | link_busy), has_ink, state};
+    wire [15:0] led_ui = {out_len, (note != 2'd0), m_left, digit, (busy_i | link_busy), has_ink, state};
+    wire [15:0] led_ct = {ct_rx_mask, ct_busy, ct_tx_ok, ct_pass, ct_fail | ct_tx_bad};
+    assign led = ct_mode ? led_ct : led_ui;
 endmodule
