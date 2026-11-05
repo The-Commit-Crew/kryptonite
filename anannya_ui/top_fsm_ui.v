@@ -1,32 +1,33 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////
-// top_fsm.v (Anannya) - message layer over uart_link (plaintext for now)
-//  SEND:    send_req (1 clk) -> snapshot msg -> write bytes -> tx_send -> OK/FAIL
-//  RECEIVE: new type-0x10 packet -> raw bytes in rx_log, digits in rmsg
-//  CRYPTO SLOT: add ENCRYPT between snapshot and S_LOAD, DECRYPT after the read.
+// top_fsm.v (Anannya) - message layer over uart_link, ONE BYTE PER CHARACTER
+//  SEND:    send_req (1 clk) -> snapshot -> write bytes -> tx_send -> OK/FAIL
+//  RECEIVE: a new type-0x10 packet replaces rx_log / rx_n
+//  CRYPTO SLOT: ENCRYPT goes between the snapshot and S_LOAD,
+//               DECRYPT goes after the receive read.
 //////////////////////////////////////////////////////////////////////////////
 module top_fsm #(
     parameter MAXLEN      = 16,
     parameter ACK_TIMEOUT = 3_000_000
 )(
-    input clk, rst,
-    input loopback,                    // 1: our TX feeds our own RX
-    input rx_pin, send_req,
-    output tx_pin,                    // 1-clock pulse
-    input  [MAXLEN*4-1:0] msg_in,       // digit 0 in [3:0]
-    input [4:0] msg_len_in,
-    input rx_clear,                    // 1-clock pulse
-    output reg  send_ok, send_fail,
-    output tx_busy,
+    input  wire clk,
+    input  wire rst,
+    input  wire loopback,                    // 1: our TX feeds our own RX
+    input  wire rx_pin,
+    output wire tx_pin,
+    input  wire send_req,                    // 1-clock pulse
+    input  wire [MAXLEN*8-1:0] msg_in,       // byte 0 = first character
+    input  wire [4:0] msg_len_in,
+    input  wire rx_clear,                    // 1-clock pulse
+    output reg  send_ok,
+    output reg  send_fail,
+    output wire tx_busy,
     output reg  [MAXLEN*8-1:0] rx_log,       // received bytes, byte 0 in [7:0]
-    output reg  [4:0] rx_n,
-    output reg  [MAXLEN*4-1:0] rmsg,         // received digits (low nibble of each byte)
-    output reg  [4:0] rmsg_len
+    output reg  [4:0] rx_n                   // how many bytes are valid
 );
     localparam [7:0] T_DATA = 8'h10;
     localparam [4:0] MAXL   = MAXLEN;
 
-    // ---- declarations first (a name must exist before it is used) ----
     wire link_tx;
     wire link_rx = loopback ? link_tx : rx_pin;
     assign tx_pin = link_tx;
@@ -52,7 +53,7 @@ module top_fsm #(
     //------------------------------------------------------------ sender FSM
     localparam S_IDLE = 2'd0, S_LOAD = 2'd1, S_WAIT = 2'd2;
     reg  [1:0] sst;
-    reg  [MAXLEN*4-1:0] snap;
+    reg  [MAXLEN*8-1:0] snap;
     reg  [4:0] widx;
     wire [4:0] n_in = (msg_len_in > MAXL) ? MAXL : msg_len_in;
     assign tx_busy = (sst != S_IDLE) | l_busy;
@@ -66,9 +67,8 @@ module top_fsm #(
         end else begin
             case (sst)
                 S_IDLE: begin
-                    // an empty message is ignored
-                    if (send_req && msg_len_in != 5'd0 && !l_busy) begin
-                        snap      <= msg_in;           // snapshot: editing can't change it now
+                    if (send_req && msg_len_in != 5'd0 && !l_busy) begin   // empty is ignored
+                        snap      <= msg_in;       // snapshot: editing can't change it now
                         snap_len  <= {3'd0, n_in};
                         widx      <= 5'd0;
                         send_ok   <= 1'b0;
@@ -76,18 +76,18 @@ module top_fsm #(
                         sst       <= S_LOAD;
                     end
                 end
-                S_LOAD: begin                          // one byte per clock
+                S_LOAD: begin                      // one byte per clock
                     if (widx == snap_len[4:0]) begin
-                        l_send <= 1'b1;                // last write is already stored
+                        l_send <= 1'b1;
                         sst    <= S_WAIT;
                     end else begin
                         l_we   <= 1'b1;
                         l_wa   <= {2'b00, widx};
-                        l_wd   <= {4'd0, snap[widx*4 +: 4]};
+                        l_wd   <= snap[widx*8 +: 8];
                         widx   <= widx + 5'd1;
                     end
                 end
-                S_WAIT: begin                          // done/fail are 1-clock pulses
+                S_WAIT: begin                      // done/fail are 1-clock pulses
                     if (l_done) begin
                         send_ok <= 1'b1; send_fail <= 1'b0; sst <= S_IDLE;
                     end else if (l_fail) begin
@@ -101,12 +101,12 @@ module top_fsm #(
 
     //------------------------------------------------------------ receiver FSM
     // l_rd is read combinationally from ri, so byte ri is valid in the same clock.
-    reg       rstate;                                  // 0 idle, 1 reading
+    reg       rstate;                              // 0 idle, 1 reading
     reg [4:0] rd_n;
     always @(posedge clk) begin
         if (rst) begin
             rstate <= 1'b0; ri <= 7'd0; rd_n <= 5'd0;
-            rx_log <= 0; rx_n <= 5'd0; rmsg <= 0; rmsg_len <= 5'd0;
+            rx_log <= 0; rx_n <= 5'd0;
         end else begin
             if (!rstate) begin
                 if (l_rxv && l_rtype == T_DATA && l_rlen != 8'd0) begin
@@ -116,16 +116,14 @@ module top_fsm #(
                 end
             end else begin
                 rx_log[ri*8 +: 8] <= l_rd;
-                rmsg[ri*4 +: 4]   <= l_rd[3:0];
                 ri <= ri + 7'd1;
-                if (ri[4:0] == rd_n - 5'd1) begin      // last byte: publish the counts
-                    rstate   <= 1'b0;
-                    rx_n     <= rd_n;
-                    rmsg_len <= rd_n;
+                if (ri[4:0] == rd_n - 5'd1) begin  // last byte: publish the count
+                    rstate <= 1'b0;
+                    rx_n   <= rd_n;
                 end
             end
-            if (rx_clear) begin                        // last, so it wins
-                rx_log <= 0; rx_n <= 5'd0; rmsg <= 0; rmsg_len <= 5'd0;
+            if (rx_clear) begin                    // last, so it wins
+                rx_log <= 0; rx_n <= 5'd0;
             end
         end
     end
