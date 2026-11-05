@@ -12,7 +12,17 @@
 //   JA[0] = our TX (JA1), JA[1] = our RX (JA2)
 //   sw[15] reset, sw[14] debug, sw[13] role (0 sender / 1 receiver), sw[11:8] debug digit,
 //   sw[4] loopback, sw[1:0] brush
-module My_Top_Module (
+module My_Top_Module #(
+    parameter ENCRYPT_SEND = 1'b1,
+    parameter SIM_MULTIPLIER = 1'b0,
+    parameter FIXED_NOISE = 1'b0,
+    parameter KEY_DIR = "crypto/keys/board1",
+    parameter NOISE_DIR = "crypto/test_vectors/noise",
+    parameter ACK_TIMEOUT = 3_000_000,
+    parameter BYTE_TMO = 100_000,
+    parameter MAX_RETRY = 3,
+    parameter [15:0] BAUD_INC = 16'd1208
+)(
     input  clk,
     input  [15:0] sw,
     input  btnC, btnU, btnL, btnR, btnD,
@@ -119,16 +129,47 @@ module My_Top_Module (
 
     // SEND = btnC while on the MESSAGE screen (sender role only)
     wire send_req   = p_confirm & (state == 3'd3) & ~role_rx;
+    wire retry_req  = p_retry & (state == 3'd3) & ~role_rx;
     // receiver role: btnD on the MESSAGE screen clears the received message
     wire rx_clr_all = ctrl_rxclr | (p_clear & (state == 3'd3) & role_rx);
 
-    top_fsm #(.MAXLEN(MAXLEN)) u_fsm (
+    wire mul_wr_en, mul_start, mul_done;
+    wire [7:0] mul_wr_addr, mul_rd_addr;
+    wire [11:0] mul_left, mul_right, mul_rd_data;
+
+    top_fsm #(.MAXLEN(MAXLEN), .ENCRYPT_SEND(ENCRYPT_SEND), .FIXED_NOISE(FIXED_NOISE),
+              .KEY_DIR(KEY_DIR), .NOISE_DIR(NOISE_DIR), .ACK_TIMEOUT(ACK_TIMEOUT),
+              .BYTE_TMO(BYTE_TMO), .MAX_RETRY(MAX_RETRY), .BAUD_INC(BAUD_INC)) u_fsm (
         .clk(clk), .rst(rst), .loopback(sw[4]),
         .rx_pin(JA[1]), .tx_pin(ja_tx),
         .send_req(send_req), .msg_in(msg), .msg_len_in(msg_len),
         .rx_clear(rx_clr_all),
         .send_ok(link_ok), .send_fail(link_fail), .tx_busy(link_busy),
-        .rx_log(rx_log), .rx_n(rx_n), .rmsg(rmsg), .rmsg_len(rmsg_len));
+        .rx_log(rx_log), .rx_n(rx_n), .rmsg(rmsg), .rmsg_len(rmsg_len),
+        .retry_req(retry_req), .mul_wr_en(mul_wr_en), .mul_wr_addr(mul_wr_addr),
+        .mul_left(mul_left), .mul_right(mul_right), .mul_start(mul_start), .mul_done(mul_done),
+        .mul_rd_addr(mul_rd_addr), .mul_rd_data(mul_rd_data));
+
+    // shared_poly_multiplier is the hardware boundary for the teammate's module.
+    // It must implement this normal-form interface or provide an adapter to it.
+    generate
+        if (ENCRYPT_SEND && SIM_MULTIPLIER) begin : simulation_multiplier
+            poly_mult_model multiplier (
+                .clk(clk), .rst(rst), .wr_en(mul_wr_en), .wr_addr(mul_wr_addr),
+                .left_data(mul_left), .right_data(mul_right), .start(mul_start), .done(mul_done),
+                .rd_addr(mul_rd_addr), .rd_data(mul_rd_data)
+            );
+        end else if (ENCRYPT_SEND) begin : hardware_multiplier
+            shared_poly_multiplier multiplier (
+                .clk(clk), .rst(rst), .wr_en(mul_wr_en), .wr_addr(mul_wr_addr),
+                .left_data(mul_left), .right_data(mul_right), .start(mul_start), .done(mul_done),
+                .rd_addr(mul_rd_addr), .rd_data(mul_rd_data)
+            );
+        end else begin : plaintext_multiplier
+            assign mul_done = 1'b0;
+            assign mul_rd_data = 12'd0;
+        end
+    endgenerate
 
     // JA is inout in the master naming: drive pin 0 as TX, pin 1 stays an input
     assign JA[0] = ja_tx;
@@ -168,7 +209,7 @@ module My_Top_Module (
 
     //---------------------------------------------------------- the renderer
     wire [15:0] pdata;
-    ui_screen #(.MAXLEN(MAXLEN)) u_screen (
+    ui_screen #(.MAXLEN(MAXLEN), .ENCRYPT_SEND(ENCRYPT_SEND)) u_screen (
         .px(px), .py(py), .state(state), .digit(digit),
         .msg(msg), .msg_len(msg_len), .rmsg(rmsg), .rmsg_len(rmsg_len),
         .role_rx(role_rx), .note(note),
@@ -189,5 +230,5 @@ module My_Top_Module (
 
     //---------------------------------------------------------- LEDs
     // [15:11] msg_len  [10] note  [9] left click  [8:5] digit  [4] busy  [3] has_ink  [2:0] state
-    assign led = {msg_len, (note != 2'd0), m_left, digit, busy_i, has_ink, state};
+    assign led = {msg_len, (note != 2'd0), m_left, digit, (busy_i | link_busy), has_ink, state};
 endmodule

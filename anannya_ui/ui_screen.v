@@ -4,7 +4,8 @@
 // Pure combinational: no clock, no state. Moved out of ui_top unchanged.
 //////////////////////////////////////////////////////////////////////////////
 module ui_screen #(
-       parameter MAXLEN = 16
+       parameter MAXLEN = 16,
+       parameter ENCRYPT_SEND = 1'b0
    )(
     input  [6:0] px,
     input  [5:0] py,
@@ -100,7 +101,8 @@ module ui_screen #(
     text_line #(.N(8), .X0(0), .Y0(32), .SCALE(2)) u_t_r2 (.px(px), .py(py), .chars(row2_chars), .on(t_row2));
 
     // both branches are exactly 16 characters (96 pixels wide)
-    wire [127:0] mhint_chars = role_rx ? {"D:CLR R:LOG", 40'h2020202020} : "C:GO D:CLR R:LOG";
+    wire [127:0] mhint_chars = role_rx ? {"D:CLR R:LOG", 40'h2020202020} :
+                              ((ENCRYPT_SEND && link_fail) ? "C:NEW L:RETRY   " : "C:GO D:CLR R:LOG");
     text_line #(.N(16), .X0(0), .Y0(54), .SCALE(1)) u_t_mh (.px(px), .py(py), .chars(mhint_chars), .on(t_mhint));
 
     // RX screen: "GOT nn" + OK/FAIL on top, 4 rows of 4 hex bytes, hint line
