@@ -2,7 +2,7 @@
 //////////////////////////////////////////////////////////////////////////////
 // Message layer over one uart_link, with selectable Board 1 encryption.
 //  SEND:    send_req (1 clk) -> snapshot msg -> write bytes -> tx_send -> OK/FAIL
-//  RECEIVE: new type-0x10 packet -> raw bytes in rx_log, digits in rmsg
+//  RECEIVE: new short type-0x10 packet -> ASCII bytes in rx_log
 //  ENCRYPT_SEND selects the encrypted sender. The default preserves plaintext.
 //////////////////////////////////////////////////////////////////////////////
 module top_fsm #(
@@ -20,15 +20,13 @@ module top_fsm #(
     input loopback,                    // 1: our TX feeds our own RX
     input rx_pin, send_req,
     output tx_pin,                    // 1-clock pulse
-    input  [MAXLEN*4-1:0] msg_in,       // digit 0 in [3:0]
+    input  [MAXLEN*8-1:0] msg_in,       // ASCII byte 0 in [7:0]
     input [4:0] msg_len_in,
     input rx_clear,                    // 1-clock pulse
     output send_ok, send_fail,
     output tx_busy,
     output reg  [MAXLEN*8-1:0] rx_log,       // received bytes, byte 0 in [7:0]
     output reg  [4:0] rx_n,
-    output reg  [MAXLEN*4-1:0] rmsg,         // received digits (low nibble of each byte)
-    output reg  [4:0] rmsg_len,
     input retry_req,
     output wire mul_wr_en,
     output wire [7:0] mul_wr_addr,
@@ -73,7 +71,7 @@ module top_fsm #(
     //------------------------------------------------------------ sender FSM
     localparam S_IDLE = 2'd0, S_LOAD = 2'd1, S_WAIT = 2'd2;
     reg  [1:0] sst;
-    reg  [MAXLEN*4-1:0] snap;
+    reg  [MAXLEN*8-1:0] snap;
     reg  [4:0] widx;
     wire [4:0] n_in = (msg_len_in > MAXL) ? MAXL : msg_len_in;
     assign tx_busy = ENCRYPT_SEND ? c_busy : ((sst != S_IDLE) | l_busy);
@@ -123,7 +121,7 @@ module top_fsm #(
                     end else begin
                         l_we   <= 1'b1;
                         l_wa   <= {2'b00, widx};
-                        l_wd   <= {4'd0, snap[widx*4 +: 4]};
+                        l_wd   <= snap[widx*8 +: 8];
                         widx   <= widx + 5'd1;
                     end
                 end
@@ -148,7 +146,7 @@ module top_fsm #(
     always @(posedge clk) begin
         if (rst) begin
             rstate <= 1'b0; ri <= 7'd0; rd_n <= 5'd0;
-            rx_log <= 0; rx_n <= 5'd0; rmsg <= 0; rmsg_len <= 5'd0;
+            rx_log <= 0; rx_n <= 5'd0;
         end else begin
             if (!rstate) begin
                 // Full ciphertext fragments belong to the Board 2 reassembler.
@@ -160,16 +158,14 @@ module top_fsm #(
                 end
             end else begin
                 rx_log[ri*8 +: 8] <= l_rd;
-                rmsg[ri*4 +: 4]   <= l_rd[3:0];
                 ri <= ri + 7'd1;
                 if (ri[4:0] == rd_n - 5'd1) begin      // last byte: publish the counts
                     rstate   <= 1'b0;
                     rx_n     <= rd_n;
-                    rmsg_len <= rd_n;
                 end
             end
             if (rx_clear) begin                        // last, so it wins
-                rx_log <= 0; rx_n <= 5'd0; rmsg <= 0; rmsg_len <= 5'd0;
+                rx_log <= 0; rx_n <= 5'd0;
             end
         end
     end

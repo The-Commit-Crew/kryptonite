@@ -13,6 +13,8 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
     logic submit = 0, confirm = 0, retry = 0, clear = 0, next_screen = 0;
     logic pred_valid = 0;
     logic [3:0] pred = 0;
+    logic [7:0] keyboard_key = 0;
+    logic keyboard_valid = 0;
     wire b_tx;
     logic cut_ab = 0;
     wire b_rx = cut_ab ? 1'b1 : JA[0];
@@ -39,8 +41,9 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
     logic [11:0] fixture [0:767];
     logic [7:0] fixture_message [0:31];
     logic [7:0] received [0:1535];
-    string expected_digits = "";
+    string expected_text = "";
     int packets = 0, fragment = 0, offset = 0, next_fragment = 0, multiplies = 0;
+    int capture_number = 0;
     longint unsigned cycles_since_reset = 0, sample_seed = 0;
     bit reading = 0;
 
@@ -73,7 +76,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
                 if (coefficient_index >= 512) begin
                     message_index = (coefficient_index - 512) / 8;
                     bit_index = (coefficient_index - 512) % 8;
-                    character = (message_index < expected_digits.len()) ? expected_digits[message_index] : 8'h20;
+                    character = (message_index < expected_text.len()) ? expected_text[message_index] : 8'h20;
                     value = (int'(value) + 3329 + 1665 *
                             (int'(character[bit_index]) - int'(fixture_message[message_index][bit_index]))) % 3329;
                 end
@@ -82,7 +85,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
                     $fatal(1, "Invalid ciphertext byte %0d", byte_index);
                 if (FIXED_NOISE && ($isunknown(expected_byte) || b_data !== expected_byte))
                     $fatal(1, "Message %s byte %0d: expected %02h, got %02h",
-                           expected_digits, byte_index, expected_byte, b_data);
+                           expected_text, byte_index, expected_byte, b_data);
                 received[byte_index] = b_data;
                 if (offset == 127) begin
                     packets++;
@@ -137,8 +140,25 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
             $fatal(1, "Expected successful delivery of all twelve packets");
         if (dut.u_fsm.encrypted_tx.sender.encryption.busy !== 1'b0)
             $fatal(1, "Ciphertext was not released after acknowledgement");
+        capture_number++;
         if ($test$plusargs("capture_top"))
-            $writememh($sformatf("top_%0d_%s_%0d.mem", FIXED_NOISE, expected_digits, sample_seed), received);
+            $writememh($sformatf("top_%0d_%0d_%0d.mem", FIXED_NOISE, capture_number, sample_seed), received);
+    endtask
+
+    task automatic keypress(input logic [7:0] key);
+        keyboard_key = key;
+        keyboard_valid = 1;
+        @(negedge clk);
+        keyboard_valid = 0;
+        @(negedge clk);
+    endtask
+
+    task automatic type_message(input string text);
+        keypress(8'h1B);
+        for (int i = 0; i < text.len(); i++)
+            keypress(text[i]);
+        if (dut.ed_len != text.len())
+            $fatal(1, "Keyboard editor did not retain the complete message");
     endtask
 
     initial begin
@@ -152,6 +172,8 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
         force dut.pred_i = pred;
         force dut.empty_i = 1'b0;
         force dut.busy_i = 1'b0;
+        force dut.kb_key = keyboard_key;
+        force dut.kb_key_v = keyboard_valid;
         $readmemh("crypto/test_vectors/ciphertext/u0.mem", fixture,   0, 255);
         $readmemh("crypto/test_vectors/ciphertext/u1.mem", fixture, 256, 511);
         $readmemh("crypto/test_vectors/ciphertext/v.mem",  fixture, 512, 767);
@@ -163,13 +185,11 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
         sw[15] = 0;
         repeat (5) @(negedge clk);
 
-        compose("379");
-        sw[13] = 1;
         press(1);
         if (dut.link_busy || multiplies != 0)
-            $fatal(1, "Receiver role unexpectedly started encryption");
-        sw[13] = 0;
-        expected_digits = "379";
+            $fatal(1, "Mouse Send outside the MESSAGE screen started encryption");
+        compose("379");
+        expected_text = "379";
         press(1);
         if (!dut.link_busy || !led[4])
             $fatal(1, "Send did not assert UI busy and its LED");
@@ -181,7 +201,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
         $display("PASS: top-level UI Send delivered all 1536 bytes and preserved its snapshot");
 
         packets = 0;
-        expected_digits = "15";
+        expected_text = "15";
         press(1);
         wait (packets == 4);
         @(negedge clk);
@@ -200,14 +220,14 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
             $fatal(1, "Retry unexpectedly encrypted the edited message");
         $display("PASS: Left after FAIL resent retained ciphertext despite UI edits");
 
-        expected_digits = "8";
+        expected_text = "8";
         packets = 0;
         cut_ab = 1;
         press(1);
         wait (dut.link_fail === 1'b1);
         @(negedge clk);
         compose("2");
-        expected_digits = "2";
+        expected_text = "2";
         packets = 0;
         cut_ab = 0;
         press(1);
@@ -215,6 +235,31 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
         if (multiplies != 24)
             $fatal(1, "New Send after failure did not run a new encryption");
         $display("PASS: Centre after FAIL replaced the retained ciphertext with a new message");
+
+        sw[13] = 1;
+        sw[15] = 1;
+        repeat (5) @(negedge clk);
+        sw[15] = 0;
+        repeat (5) @(negedge clk);
+        type_message("Hi NUS 2026!");
+        expected_text = "Hi NUS 2026!";
+        packets = 0;
+        keypress(8'h0D);
+        type_message("changed");
+        keypress(8'h0D);  // A busy keyboard Send also preserves the snapshot.
+        expect_success();
+        if (multiplies != 30)
+            $fatal(1, "A keyboard Send was accepted while busy");
+        $display("PASS: keyboard Enter encrypted ASCII letters, punctuation and spaces");
+
+        type_message("AbC123!?- 456XYZ");
+        expected_text = "AbC123!?- 456XYZ";
+        packets = 0;
+        keypress(8'h0D);
+        expect_success();
+        if (multiplies != 36)
+            $fatal(1, "Full-length keyboard message did not finish one encryption");
+        $display("PASS: all sixteen keyboard ASCII bytes were preserved");
         $finish;
     end
 

@@ -2,13 +2,15 @@
 
 module board1_send #(
     parameter FIXED_NOISE = 1'b0,
+    parameter ASCII_INPUT = 1'b0,
     parameter KEY_DIR = "crypto/keys/board1",
     parameter NOISE_DIR = "crypto/test_vectors/noise"
 )(
     input  wire        clk,
     input  wire        rst,
     input  wire        send_req,         // One-cycle UI Send pulse.
-    input  wire [63:0] msg_in,           // Up to 16 digits, digit 0 in [3:0].
+    // ASCII_INPUT=1 accepts 16 ASCII bytes. The default accepts 16 digit nibbles.
+    input  wire [(ASCII_INPUT ? 128 : 64)-1:0] msg_in,
     input  wire [4:0]  msg_len_in,
     output wire        busy,
 
@@ -89,17 +91,20 @@ module board1_send #(
     );
 
     function [255:0] pack_message;
-        input [63:0] digits;
+        input [(ASCII_INPUT ? 128 : 64)-1:0] characters;
         input [4:0] length;
         integer i;
         reg [3:0] digit;
         begin
             pack_message = {32{8'h20}};
             for (i = 0; i < 16; i = i + 1) begin
-                digit = digits[4*i +: 4];
-                if (i < length)
-                    // Match the UI's display of out-of-range debug digits as E.
-                    pack_message[8*i +: 8] = (digit <= 9) ? (8'h30 + {4'd0, digit}) : 8'h45;
+                digit = characters[4*i +: 4];
+                if (i < length) begin
+                    if (ASCII_INPUT)
+                        pack_message[8*i +: 8] = characters[8*i +: 8];
+                    else
+                        pack_message[8*i +: 8] = (digit <= 9) ? (8'h30 + {4'd0, digit}) : 8'h45;
+                end
             end
         end
     endfunction

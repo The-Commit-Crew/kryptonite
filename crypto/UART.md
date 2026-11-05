@@ -40,10 +40,12 @@ ciphertext restarts at packet type `0x10` and source coefficient zero.
 ## Board 1 integration
 
 `My_Top_Module` enables the encrypted sender through `top_fsm.ENCRYPT_SEND`.
-Centre on the sender MESSAGE screen snapshots and encrypts the current digits.
+Centre on the mouse MESSAGE screen snapshots and encrypts the current digits.
+Enter on the keyboard board snapshots the editor's ASCII bytes. Both paths
+preserve the first character in byte 0 and pad the 32-byte plaintext with spaces.
 The busy LED covers encryption and transmission. OK appears after all packets
 are acknowledged. After FAIL, Left retries the retained ciphertext, and Centre
-encrypts a new snapshot. Edits and extra Send presses during an active operation
+(mouse) or Enter (keyboard) encrypts a new snapshot. Edits and extra Send presses during an active operation
 leave the in-flight message intact. The source is released after success or
 when a new message replaces a failed operation.
 

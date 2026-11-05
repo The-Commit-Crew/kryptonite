@@ -8,7 +8,7 @@ module board1_message_tx #(
     parameter NOISE_DIR = "crypto/test_vectors/noise"
 )(
     input wire clk, rst, send_req, retry_req,
-    input wire [63:0] msg_in,
+    input wire [127:0] msg_in,           // Up to 16 ASCII bytes, byte 0 in [7:0].
     input wire [4:0] msg_len_in,
     output wire busy,
     output reg send_ok, send_fail,
@@ -28,7 +28,7 @@ module board1_message_tx #(
     localparam [2:0] IDLE = 0, START_ENCRYPT = 1, ENCRYPTING = 2,
                      START_TX = 3, TRANSMITTING = 4, FAILED = 5;
     reg [2:0] state;
-    reg [63:0] snapshot;
+    reg [127:0] snapshot;
     reg [4:0] snapshot_len;
     wire ready, adapter_done, adapter_fail;
     wire [9:0] ciphertext_addr;
@@ -38,7 +38,8 @@ module board1_message_tx #(
 
     assign busy = tx_busy || (state != IDLE && state != FAILED);
 
-    board1_send #(.FIXED_NOISE(FIXED_NOISE), .KEY_DIR(KEY_DIR), .NOISE_DIR(NOISE_DIR)) encryption (
+    board1_send #(.FIXED_NOISE(FIXED_NOISE), .ASCII_INPUT(1'b1),
+                  .KEY_DIR(KEY_DIR), .NOISE_DIR(NOISE_DIR)) encryption (
         .clk(clk), .rst(rst), .send_req(state == START_ENCRYPT),
         .msg_in(snapshot), .msg_len_in(snapshot_len), .busy(),
         .ciphertext_ready(ready), .ciphertext_release(release_ciphertext),
