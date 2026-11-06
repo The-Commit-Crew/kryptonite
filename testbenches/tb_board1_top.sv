@@ -2,7 +2,7 @@
 
 // Exercises the actual board top and UI state machine. Debounced button pulses
 // and completed digit predictions are supplied at their peripheral boundaries.
-module tb_board1_top #(parameter FIXED_NOISE = 1);
+module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
     logic clk = 0;
     always #5 clk = ~clk;
     logic [15:0] sw = 16'h8000;
@@ -20,7 +20,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
     wire b_rx = cut_ab ? 1'b1 : JA[0];
     assign JA[1] = b_tx;
 
-    My_Top_Module #(.SIM_MULTIPLIER(1), .FIXED_NOISE(FIXED_NOISE), .BAUD_INC(16'd16384),
+    My_Top_Module #(.SIM_MULTIPLIER(SIM_MULTIPLIER), .FIXED_NOISE(FIXED_NOISE), .BAUD_INC(16'd16384),
                     .ACK_TIMEOUT(40000), .BYTE_TMO(2000), .MAX_RETRY(1)) dut (
         .clk(clk), .sw(sw), .btnC(1'b0), .btnU(1'b0), .btnL(1'b0), .btnR(1'b0), .btnD(1'b0),
         .led(led), .JA(JA), .JC(JC), .PS2Clk(PS2Clk), .PS2Data(PS2Data)
@@ -241,19 +241,24 @@ module tb_board1_top #(parameter FIXED_NOISE = 1);
         repeat (5) @(negedge clk);
         sw[15] = 0;
         repeat (5) @(negedge clk);
-        type_message("Hi NUS 2026!");
-        expected_text = "Hi NUS 2026!";
+        type_message("2026379");
+        expected_text = "2026379";
+        keypress("A");
+        keypress(" ");
+        keypress("!");
+        if (dut.ed_len != 7)
+            $fatal(1, "Digits-only editor accepted a non-digit");
         packets = 0;
         keypress(8'h0D);
-        type_message("changed");
+        type_message("9876");
         keypress(8'h0D);  // A busy keyboard Send also preserves the snapshot.
         expect_success();
         if (multiplies != 30)
             $fatal(1, "A keyboard Send was accepted while busy");
-        $display("PASS: keyboard Enter encrypted ASCII letters, punctuation and spaces");
+        $display("PASS: keyboard Enter encrypted ASCII digits and preserved the busy snapshot");
 
-        type_message("AbC123!?- 456XYZ");
-        expected_text = "AbC123!?- 456XYZ";
+        type_message("0123456789012345");
+        expected_text = "0123456789012345";
         packets = 0;
         keypress(8'h0D);
         expect_success();

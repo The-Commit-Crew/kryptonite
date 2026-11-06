@@ -25,7 +25,9 @@ module ntt_core #(
     parameter COEFF_W = 12,
     parameter ADDR_W = 8,
     parameter Q = 3329,
-    parameter INIT_FILE = ""
+    parameter INIT_FILE = "",
+    parameter ZETAS_FILE = "zetas.mem",
+    parameter PIPELINED = 0
 ) ( input clk, rst, go, ext_we,
  input [ADDR_W-1:0] ext_addr,
  input [COEFF_W-1:0] ext_wdata,
@@ -37,11 +39,13 @@ module ntt_core #(
     
     initial begin
         if (INIT_FILE != "") $readmemh(INIT_FILE, f);
-        $readmemh("zetas.mem", zetas);
+        $readmemh(ZETAS_FILE, zetas);
     end
     
-    localparam IDLE = 3'd0, READ = 3'd1, CALC = 3'd2, WRITE_A = 3'd3, WRITE_B = 3'd4, DONE = 3'd5;
+    localparam IDLE = 3'd0, READ = 3'd1, CALC = 3'd2, WRITE_A = 3'd3, WRITE_B = 3'd4, DONE = 3'd5,
+               PIPE_WAIT = 3'd6;
     reg [2:0] state = IDLE;
+    reg [2:0] pipeline_left;
     reg [COEFF_W-1:0] a_new, b_new;
     assign done = (state == DONE);
     wire busy = (state != IDLE) && (state != DONE);
@@ -74,7 +78,16 @@ module ntt_core #(
     wire [COEFF_W-1:0] wdata_m = busy? w_data: ext_wdata;
     
     wire [COEFF_W-1:0] bf_a, bf_b;
-    butterfly mul(.a(fa_q), .b(fb_q), .zeta(zeta_q), .a_out(bf_a), .b_out(bf_b));
+    generate if (PIPELINED) begin : pipelined_butterfly
+        wire [11:0] t;
+        wire [12:0] sum = {1'b0, fa_q} + {1'b0, t};
+        wire [12:0] difference = {1'b0, fa_q} + 13'd3329 - {1'b0, t};
+        mod_mult_pipeline mul(.clk(clk), .a(fb_q), .b(zeta_q), .r(t));
+        assign bf_a = (sum >= 13'd3329) ? sum - 13'd3329 : sum;
+        assign bf_b = (difference >= 13'd3329) ? difference - 13'd3329 : difference;
+    end else begin : combinational_butterfly
+        butterfly mul(.a(fa_q), .b(fb_q), .zeta(zeta_q), .a_out(bf_a), .b_out(bf_b));
+    end endgenerate
     
     always @(posedge clk) begin
         if (we_m) begin
@@ -95,8 +108,11 @@ module ntt_core #(
                 state <= READ;
             end
             READ: begin
-                state <= CALC;
+                pipeline_left <= 5;
+                state <= PIPELINED ? PIPE_WAIT : CALC;
             end
+            PIPE_WAIT: if (pipeline_left == 1) state <= CALC;
+                       else pipeline_left <= pipeline_left - 1'b1;
             CALC: begin
                a_new <= bf_a;
                b_new <= bf_b;
