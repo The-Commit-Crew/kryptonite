@@ -25,7 +25,9 @@ module intt_core#(
     parameter COEFF_W = 12,
     parameter ADDR_W = 8,
     parameter Q = 3329,
-    parameter INIT_FILE = ""
+    parameter INIT_FILE = "",
+    parameter ZETAS_FILE = "zetas.mem",
+    parameter PIPELINED = 0
 ) ( input clk, rst, go, ext_we,
  input [ADDR_W-1:0] ext_addr,
  input [COEFF_W-1:0] ext_wdata,
@@ -37,11 +39,13 @@ module intt_core#(
     
     initial begin
         if (INIT_FILE != "") $readmemh(INIT_FILE, f);
-        $readmemh("zetas.mem", zetas);
+        $readmemh(ZETAS_FILE, zetas);
     end
     
-    localparam IDLE = 4'd0, READ = 4'd1, CALC = 4'd2, WRITE_A = 4'd3, WRITE_B = 4'd4, SCALE_READ = 4'd5, SCALE_CALC = 4'd6, SCALE_WRITE = 4'd7, DONE = 4'd8;
+    localparam IDLE = 4'd0, READ = 4'd1, CALC = 4'd2, WRITE_A = 4'd3, WRITE_B = 4'd4, SCALE_READ = 4'd5, SCALE_CALC = 4'd6, SCALE_WRITE = 4'd7, DONE = 4'd8,
+               PIPE_WAIT = 4'd9, SCALE_PIPE_WAIT = 4'd10;
     reg [3:0] state = IDLE;
+    reg [2:0] pipeline_left;
     reg [COEFF_W-1:0] a_new, b_new;
     assign done = (state == DONE);
     wire busy = (state != IDLE) && (state != DONE);
@@ -75,11 +79,20 @@ module intt_core#(
     wire [COEFF_W-1:0] wdata_m = busy? w_data: ext_wdata;
     
     wire [COEFF_W-1:0] bf_a, bf_b;
-    butterfly_inv mul(.a(fa_q), .b(fb_q), .zeta(zeta_q), .a_out(bf_a), .b_out(bf_b));
-    
     wire [11:0] scale_out;
-    wire [23:0] scale_prod = fa_q * 12'd3303;
-    barrett_reduce red(.x(scale_prod), .r(scale_out));
+    generate if (PIPELINED) begin : pipelined_butterfly
+        wire [12:0] sum = {1'b0, fa_q} + {1'b0, fb_q};
+        wire [12:0] difference = {1'b0, fb_q} + 13'd3329 - {1'b0, fa_q};
+        wire [11:0] reduced_difference = (difference >= 13'd3329)
+                                             ? difference - 13'd3329 : difference;
+        assign bf_a = (sum >= 13'd3329) ? sum - 13'd3329 : sum;
+        mod_mult_pipeline mul(.clk(clk), .a(reduced_difference), .b(zeta_q), .r(bf_b));
+        mod_mult_pipeline scale(.clk(clk), .a(fa_q), .b(12'd3303), .r(scale_out));
+    end else begin : combinational_butterfly
+        butterfly_inv mul(.a(fa_q), .b(fb_q), .zeta(zeta_q), .a_out(bf_a), .b_out(bf_b));
+        wire [23:0] scale_prod = fa_q * 12'd3303;
+        barrett_reduce red(.x(scale_prod), .r(scale_out));
+    end endgenerate
     
     always @(posedge clk) begin
         if (we_m) begin
@@ -100,8 +113,11 @@ module intt_core#(
                 state <= READ;
             end
             READ: begin
-                state <= CALC;
+                pipeline_left <= 5;
+                state <= PIPELINED ? PIPE_WAIT : CALC;
             end
+            PIPE_WAIT: if (pipeline_left == 1) state <= CALC;
+                       else pipeline_left <= pipeline_left - 1'b1;
             CALC: begin
                a_new <= bf_a;
                b_new <= bf_b;
@@ -131,7 +147,12 @@ module intt_core#(
                     state <= SCALE_READ;
                 end
             end
-            SCALE_READ: state <= SCALE_CALC;
+            SCALE_READ: begin
+                pipeline_left <= 5;
+                state <= PIPELINED ? SCALE_PIPE_WAIT : SCALE_CALC;
+            end
+            SCALE_PIPE_WAIT: if (pipeline_left == 1) state <= SCALE_CALC;
+                             else pipeline_left <= pipeline_left - 1'b1;
             SCALE_CALC: begin
                 a_new <= scale_out;
                 state <= SCALE_WRITE;

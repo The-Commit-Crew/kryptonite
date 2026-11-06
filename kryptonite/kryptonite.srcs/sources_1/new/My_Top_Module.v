@@ -210,8 +210,8 @@ module My_Top_Module #(
         .mul_left(mul_left), .mul_right(mul_right), .mul_start(mul_start), .mul_done(mul_done),
         .mul_rd_addr(mul_rd_addr), .mul_rd_data(mul_rd_data));
 
-    // shared_poly_multiplier is the hardware boundary for the teammate's module.
-    // It must implement this normal-form interface or provide an adapter to it.
+    // The FPGA path uses writable forward NTTs, pair multiplication and INTT.
+    // SIM_MULTIPLIER retains the behavioral reference for quick UI simulations.
     generate
         if (ENCRYPT_SEND && SIM_MULTIPLIER) begin : simulation_multiplier
             poly_mult_model multiplier (
