@@ -13,8 +13,11 @@
 //   3. A short plaintext message (type 0x10, 2 bytes) still reaches the text
 //      reader and is NOT taken as a ciphertext fragment.
 //   4. B sends the ciphertext back to A (both directions work).
+//   Each received ciphertext is also decrypted (rx_decrypt -> decryption_ntt):
+//   the test vector must come out as "Kryptonite FPGA " (16 chars, 15 shown).
 // Needs u0.mem, u1.mem, v.mem (crypto/test_vectors/ciphertext/) in the
-// folder the simulator runs in. To keep the run short the links use 921600
+// folder the simulator runs in, plus the decryption tables s0_hat.mem,
+// s1_hat.mem, gammas.mem, zetas.mem (sources_1/imports/mem_files). To keep the run short the links use 921600
 // baud (BAUD_INC 9664) and a 4 ms ACK timeout; the logic is identical.
 // About 60 ms simulated: use "run all".
 //////////////////////////////////////////////////////////////////////////////
@@ -48,15 +51,23 @@ module tb_cipher;
         .tx_ok(a_txok), .tx_bad(a_txbad),
         .rx_mask(a_rm), .ct_ready(a_rdy), .ct_new(a_new),
         .chk_pass(a_pass), .chk_fail(a_fail), .chk_mismatch(a_mm),
-        .dec_addr(10'd0), .dec_data(),
+        .dec_busy(), .msg_new(a_mnew), .msg_log(a_mlog), .msg_n(a_mn),
         .ct_busy(a_ctb), .ct_we(a_we), .ct_wa(a_wa), .ct_wd(a_wd), .ct_len(a_len8), .ct_type(a_ty), .ct_send(a_snd),
         .lk_busy(a_lb), .lk_done(a_ld), .lk_fail(a_lf), .ct_ra(a_ra),
         .lk_rxv(a_rxv), .lk_rtype(a_rt), .lk_rlen(a_rl), .lk_rd(a_rd));
 
     // ---------------- board B ----------------
     reg         b_send = 0;
-    reg  [9:0]  b_dec = 0;
-    wire [11:0] b_decd;
+    wire a_mnew, b_mnew; wire [127:0] a_mlog, b_mlog; wire [4:0] a_mn, b_mn;
+    reg  [127:0] want_txt;
+    integer j, txt_ok;
+    initial begin                        // "Kryptonite FPGA " with byte 0 in [7:0]
+        want_txt = 0;
+        want_txt = {"K","r","y","p","t","o","n","i","t","e"," ","F","P","G","A",8'h00};  // padding cleared
+        for (j = 0; j < 8; j = j + 1) begin   // reverse the byte order
+            {want_txt[8*j +: 8], want_txt[8*(15-j) +: 8]} = {want_txt[8*(15-j) +: 8], want_txt[8*j +: 8]};
+        end
+    end
     wire b_ok, b_failt, b_busy, b_rxnew;
     wire [127:0] b_log; wire [4:0] b_n;
     wire [11:0] b_cs, b_cr, b_ce, b_cn;
@@ -77,7 +88,7 @@ module tb_cipher;
         .tx_ok(b_txok), .tx_bad(b_txbad),
         .rx_mask(b_rm), .ct_ready(b_rdy), .ct_new(b_new),
         .chk_pass(b_pass), .chk_fail(b_fail), .chk_mismatch(b_mm),
-        .dec_addr(b_dec), .dec_data(b_decd),
+        .dec_busy(), .msg_new(b_mnew), .msg_log(b_mlog), .msg_n(b_mn),
         .ct_busy(b_ctb), .ct_we(b_we), .ct_wa(b_wa), .ct_wd(b_wd), .ct_len(b_len8), .ct_type(b_ty), .ct_send(b_snd),
         .lk_busy(b_lb), .lk_done(b_ld), .lk_fail(b_lf), .ct_ra(b_ra),
         .lk_rxv(b_rxv), .lk_rtype(b_rt), .lk_rlen(b_rl), .lk_rd(b_rd));
@@ -103,8 +114,7 @@ module tb_cipher;
         begin
             bad = 0;
             for (i = 0; i < 768; i = i + 1) begin
-                @(negedge clk) b_dec = i;
-                @(negedge clk) if (b_decd !== ref_ct[i]) bad = bad + 1;
+                if (cb.u_rx.ram[i] !== ref_ct[i]) bad = bad + 1;
             end
             check("B RAM equals the .mem files (768 words)", bad == 0);
         end
@@ -125,6 +135,9 @@ module tb_cipher;
         check("B: ct_check pass, 0 mismatches", b_pass && !b_fail && b_mm == 0);
         check("A: 12 data packets counted as sent", a_cs == 12'h012);
         compare_b_ram;
+        wait (b_mlog == want_txt || $time > 999_000_000_000);
+        repeat (5) @(negedge clk);
+        check("B: decrypted to \"Kryptonite FPGA\"", b_mlog == want_txt && b_mn == 15);
 
         $display("2. Again, with a corrupted packet on the way");
         @(negedge clk) a_send = 1; @(negedge clk) a_send = 0;
@@ -153,6 +166,8 @@ module tb_cipher;
         wait (a_pass || a_fail);
         repeat (5) @(negedge clk);
         check("A: ct_check pass", a_pass && a_mm == 0);
+        repeat (40000) @(negedge clk);           // decryption takes ~34k clocks
+        check("A: decrypted to \"Kryptonite FPGA\"", a_mlog == want_txt && a_mn == 15);
 
         if (errors == 0) $display("ALL CIPHER TESTS PASSED");
         else             $display("%0d CIPHER TEST(S) FAILED", errors);

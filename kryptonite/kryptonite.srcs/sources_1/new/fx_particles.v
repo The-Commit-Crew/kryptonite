@@ -12,6 +12,10 @@
 //    where r(n) is the spring curve and n = frames since that pixel left.
 //    Nothing is stored per pixel: the scatter and the delay come from a hash
 //    of the pixel's home position, so they are the same every frame.
+//    EXPLODE is the same thing run backwards: shown position =
+//      home + scatter * (256 - r(n)) / 256
+//    so the glyphs (the ciphertext) start in place and burst outwards.
+//    Used by the decrypt reveal: ciphertext explodes, plaintext assembles.
 //
 // 2. FIREWORKS: 64 real particles, each with position and velocity in fixed
 //    point (Q8.8: 256 = one pixel). Every frame:
@@ -30,7 +34,8 @@
 // available per frame at 60 fps.
 //
 // Colours are palette indexes (0 = nothing here), turned into RGB565 by
-// fx_engine.v.
+// fx_engine.v: 1 cyan 2 white 3 yellow 4 orange 5 red 6 dark red 7 violet
+// 8 green.
 //////////////////////////////////////////////////////////////////////////////
 module fx_particles (
     input  wire        clk,
@@ -39,6 +44,7 @@ module fx_particles (
 
     // assemble effect: the text being drawn and how far into the effect we are
     input  wire        asm_on,
+    input  wire        asm_explode,   // 1: burst outwards (ciphertext), 0: assemble
     input  wire [7:0]  asm_t,         // frames since the effect started
     input  wire [63:0] row1_chars,    // 8 ASCII characters, same layout as
     input  wire [63:0] row2_chars,    // the MSG screen (scale 2, y = 14 and 32)
@@ -260,8 +266,8 @@ module fx_particles (
             s2_x <= sh_x; s2_y <= sh_y;
             s2_dx <= $signed(h1[11:4]) >>> 1;            // scatter -64..63 px across
             s2_dy <= $signed({h1[15:12], h1[3:0]}) >>> 2; // and -32..31 px up/down
-            s2_r  <= r1;
-            s2_moving <= (n1 < 8'd30);
+            s2_r  <= asm_explode ? (10'sd256 - r1) : r1;
+            s2_moving <= asm_explode ? (n1 != 8'd0) : (n1 < 8'd30);
 
             s3_v <= s2_v;
             s3_px <= $signed({3'd0, s2_x}) + (mx >>> 8);
@@ -271,7 +277,10 @@ module fx_particles (
             if (s3_v && s3_px >= 0 && s3_px <= 95 && s3_py >= 0 && s3_py <= 63) begin
                 we    <= 1'b1;
                 waddr <= addr_of(s3_px[6:0], s3_py[5:0]);
-                wdata <= s3_moving ? (lfsr[0] ? 4'd1 : 4'd7) : 4'd2;  // cyan/violet in flight, white home
+                // assemble: cyan/violet in flight, white home
+                // explode:   green before it leaves, green/cyan sparks in flight
+                wdata <= asm_explode ? (s3_moving ? (lfsr[0] ? 4'd8 : 4'd1) : 4'd8)
+                                     : (s3_moving ? (lfsr[0] ? 4'd1 : 4'd7) : 4'd2);
             end
 
             case (fs)

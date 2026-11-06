@@ -16,7 +16,9 @@
 //   KEYBOARD board: type to compose, Enter = send, Esc = clear, Backspace = delete,
 //                   Tab = COMPOSE -> RX text -> RX hex -> COMPOSE, btnD = clear received
 //   Khushi's additions:
-//     sw[3] up = effects off, sw[5] = decrypt reveal style (0 scramble / 1 particles)
+//     sw[3] up = effects off, sw[5] = decrypt reveal style
+//     (0 ciphertext -> particles -> message, 1 scramble-then-lock). Send shows hex rain.
+//     Received ciphertext is rebuilt, checked and decrypted; RX shows the decrypted text.
 //     btnU on RX replays the reveal; btnU on MSG / COMPOSE corrupts the next packet
 //     (demo of the automatic re-send). 7-segment cycles the link counters
 //     S (sent) r (received) E (errors) n (re-sends) every 2 s.
@@ -240,24 +242,36 @@ module My_Top_Module #(
         .lk_busy(lk_busy), .lk_done(lk_done), .lk_fail(lk_fail),
         .ct_ra(ct_ra), .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen), .lk_rd(lk_rd));
 
-    //---------------------------------------------------------- ciphertext receive + test sender (Khushi)
-    // Board 2 side: rebuild the 12 x 128-byte ciphertext packets into 768 words.
-    // ct_dec_* is the read port for the decryptor.
+    //---------------------------------------------------------- ciphertext receive + decrypt (Khushi)
+    // Board 2 side: rebuild the 12 x 128-byte ciphertext packets into 768 words,
+    // check them, decrypt them (decryption_ntt) and show the message on RX.
     wire [11:0] ct_rx_mask;
     wire        ct_tx_ok, ct_tx_bad, ct_ready, ct_new, ct_pass, ct_fail;
     wire [9:0]  ct_mism;
-    wire [9:0]  ct_dec_addr = 10'd0;               // decryptor connects here
-    wire [11:0] ct_dec_data;
+    wire        dec_busy, dec_new;
+    wire [MAXLEN*8-1:0] dec_log;
+    wire [4:0]  dec_n;
     cipher_link u_ct (
         .clk(clk), .rst(rst), .test_send(ct_test_send), .clear(rx_clr_all),
         .tx_ok(ct_tx_ok), .tx_bad(ct_tx_bad),
         .rx_mask(ct_rx_mask), .ct_ready(ct_ready), .ct_new(ct_new),
         .chk_pass(ct_pass), .chk_fail(ct_fail), .chk_mismatch(ct_mism),
-        .dec_addr(ct_dec_addr), .dec_data(ct_dec_data),
+        .dec_busy(dec_busy), .msg_new(dec_new), .msg_log(dec_log), .msg_n(dec_n),
         .ct_busy(ct_busy), .ct_we(ct_we), .ct_wa(ct_wa), .ct_wd(ct_wd), .ct_len(ct_len),
         .ct_type(ct_type), .ct_send(ct_send),
         .lk_busy(lk_busy), .lk_done(lk_done), .lk_fail(lk_fail),
         .ct_ra(ct_ra), .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen), .lk_rd(lk_rd));
+
+    // RX screen shows the latest message: a decrypted one, or a plaintext one
+    // (ENCRYPT_SEND = 0 / old senders). btnD on RX clears both.
+    reg dec_show = 1'b0;
+    always @(posedge clk) begin
+        if (rst || rx_clr_all || rx_new) dec_show <= 1'b0;
+        else if (dec_new)                dec_show <= 1'b1;
+    end
+    wire [MAXLEN*8-1:0] show_log = dec_show ? dec_log : rx_log;
+    wire [4:0]          show_n   = dec_show ? dec_n   : rx_n;
+    wire                show_new = rx_new | dec_new;    // starts the decrypt reveal
 
     //---------------------------------------------------------- 7-segment link stats (Khushi)
     // cycles S -> r -> E -> n every 2 seconds, no button needed
@@ -337,7 +351,7 @@ module My_Top_Module #(
     ui_screen #(.MAXLEN(MAXLEN)) u_screen (
         .px(px_w), .py(py), .state(scr_state), .digit(digit),
         .msg(out_msg), .msg_len(out_len),
-        .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
+        .rx_log(show_log), .rx_n(show_n), .rx_hex(rx_hex),
         .role_kb(role_kb), .blink(blink), .note(note),
         .link_ok(link_ok), .link_fail(link_fail),
         .cur_x(cur_x), .cur_y(cur_y),
@@ -350,10 +364,11 @@ module My_Top_Module #(
         .clk(clk), .rst(rst), .en(~sw[3]), .style(sw[5]),
         .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
         .state(scr_state), .digit(digit),
-        .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
+        .rx_log(show_log), .rx_n(show_n), .rx_hex(rx_hex),
         .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel({~sw[0], sw[0]}),
-        .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new),
-        .replay(p_submit & (scr_state == 3'd4)));
+        .link_busy(link_busy | dec_busy), .link_ok(link_ok), .rx_new(show_new),
+        .replay(p_submit & (scr_state == 3'd4)),
+        .enc_go(send_btn));
 
     Oled_Display u_oled (
         .clk(clk6p25), .reset(rst),

@@ -2,9 +2,9 @@
 //////////////////////////////////////////////////////////////////////////////
 // cipher_link.v  (Khushi) - ciphertext receive path + a test sender
 //
-//   receive (Board 2): uart_link -> cipher_rx (768-word RAM) -> decryptor
-//                      and ct_check, which compares the result with the
-//                      known test vector (ct_source)
+//   receive (Board 2): uart_link -> cipher_rx (768-word RAM) -> ct_check,
+//                      which compares it with the known test vector, then
+//                      rx_decrypt (Divyansh's decryption_ntt) -> the message
 //   test send:         ct_source -> ciphertext_uart_tx (Shrikkanth's sender,
 //                      same 12 x 128-byte packets as real encryption) -> link
 //
@@ -12,9 +12,8 @@
 // the polynomial multiplier exists: send with test mode on, and the other
 // board (or the same board in loopback) should report PASS.
 //
-// Decryptor (Divyansh): once ct_ready = 1, read word dec_addr on dec_data one
-// clock later (0..255 u0, 256..511 u1, 512..767 v). ct_new pulses when a new
-// complete ciphertext is in.
+// Every complete ciphertext is decrypted (test vector or a real encrypted
+// send). msg_new pulses when msg_log / msg_n hold the decrypted message.
 //////////////////////////////////////////////////////////////////////////////
 module cipher_link (
     input  wire        clk,
@@ -32,9 +31,11 @@ module cipher_link (
     output wire        chk_fail,
     output wire [9:0]  chk_mismatch,
 
-    // decryptor read port (Divyansh)
-    input  wire [9:0]  dec_addr,
-    output wire [11:0] dec_data,
+    // decrypted message (same layout as top_fsm's rx_log / rx_n)
+    output wire        dec_busy,
+    output wire        msg_new,
+    output wire [127:0] msg_log,
+    output wire [4:0]  msg_n,
 
     // to top_fsm
     output wire        ct_busy,
@@ -71,7 +72,8 @@ module cipher_link (
         end
     end
 
-    // the check owns the RAM read port while it runs, the decryptor otherwise
+    // the check owns the RAM read port while it runs, the decryptor after it
+    wire [9:0] dec_addr;
     wire [9:0] rd_addr = chk_run ? chk_addr : dec_addr;
     cipher_rx u_rx (
         .clk(clk), .rst(rst), .clear(clear),
@@ -79,7 +81,16 @@ module cipher_link (
         .lk_ra(ct_ra), .lk_rd(lk_rd),
         .got_mask(rx_mask), .ready(ct_ready), .new_ct(ct_new),
         .rd_addr(rd_addr), .rd_data(rx_data));
-    assign dec_data = rx_data;
+
+    // start decrypting as soon as the check has finished with the RAM
+    reg chk_run_q;
+    always @(posedge clk) chk_run_q <= rst ? 1'b0 : chk_run;
+    wire dec_start = chk_run_q && !chk_run;
+
+    rx_decrypt u_dec (
+        .clk(clk), .rst(rst | clear), .start(dec_start),
+        .ct_addr(dec_addr), .ct_data(rx_data), .busy(dec_busy),
+        .msg_new(msg_new), .msg_log(msg_log), .msg_n(msg_n));
 
     ct_check u_chk (
         .clk(clk), .rst(rst | clear), .start(ct_new), .addr(chk_addr),

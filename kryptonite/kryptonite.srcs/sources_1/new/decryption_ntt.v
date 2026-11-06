@@ -9,7 +9,16 @@
 // Project Name: 
 // Target Devices: 
 // Tool Versions: 
-// Description: 
+// Description: Board 2 K-PKE decryption with NTT cores. msg_bits[k] is bit
+//              k%8 of message byte k/8 (same packing as board1_send).
+//
+// Added by Khushi for integration:
+//   EXT_CT = 1: read u0, u1, v from an external memory (cipher_rx, the UART
+//               receiver) through ct_addr -> ct_data (registered read, data one
+//               clock after the address). ct_addr = {0,k} u0, {1,k} u1, {2,k} v.
+//   EXT_CT = 0: the original behaviour, ciphertext from u0.mem / u1.mem / v.mem.
+//   PIPELINED = 1: ntt_core, intt_core and basemul_core use the 5-stage modular
+//               multiplier so the whole decryptor meets 100 MHz.
 // 
 // Dependencies: 
 // 
@@ -24,22 +33,18 @@ module decryption_ntt#(
     parameter N = 256,
     parameter ADDR_W = 8,
     parameter COEFF_W = 12,
-    parameter Q = 3329
+    parameter Q = 3329,
+    parameter EXT_CT = 0,
+    parameter PIPELINED = 1
 ) (
     input clk,
     input rst,
     input start,
     output done,
-    output reg [N-1:0] msg_bits = 0
+    output reg [N-1:0] msg_bits = 0,
+    output wire [ADDR_W+1:0]  ct_addr,      // EXT_CT only
+    input  wire [COEFF_W-1:0] ct_data
     );
-    reg [COEFF_W-1:0] u0 [0:N-1];
-    reg [COEFF_W-1:0] u1 [0:N-1];
-    reg [COEFF_W-1:0] v [0:N-1];
-    initial begin
-        $readmemh("u0.mem", u0);
-        $readmemh("u1.mem", u1);
-        $readmemh("v.mem", v);
-    end
     
     localparam IDLE      = 5'd0,
            LD0_RD    = 5'd1,
@@ -68,12 +73,34 @@ module decryption_ntt#(
     assign done = (state == DONE);
         
     reg [ADDR_W-1:0] k;
-    reg [COEFF_W-1:0] u0_q, u1_q, v_q;
-    always @ (posedge clk) begin
-        u0_q <= u0[k];
-        u1_q <= u1[k];
-        v_q <= v[k];
-    end
+    wire [COEFF_W-1:0] u0_q, u1_q, v_q;
+    // which polynomial the address is for: u1 while loading NTT1, v in the final step
+    wire [1:0] ct_seg = ((state == LD1_RD) || (state == LD1_WR)) ? 2'd1 :
+                        ((state == FIN_RD) || (state == FIN_CALC)) ? 2'd2 : 2'd0;
+    assign ct_addr = {ct_seg, k};
+    generate if (EXT_CT) begin : ext_ciphertext
+        assign u0_q = ct_data;
+        assign u1_q = ct_data;
+        assign v_q  = ct_data;
+    end else begin : rom_ciphertext
+        reg [COEFF_W-1:0] u0 [0:N-1];
+        reg [COEFF_W-1:0] u1 [0:N-1];
+        reg [COEFF_W-1:0] v [0:N-1];
+        initial begin
+            $readmemh("u0.mem", u0);
+            $readmemh("u1.mem", u1);
+            $readmemh("v.mem", v);
+        end
+        reg [COEFF_W-1:0] u0_r, u1_r, v_r;
+        always @ (posedge clk) begin
+            u0_r <= u0[k];
+            u1_r <= u1[k];
+            v_r <= v[k];
+        end
+        assign u0_q = u0_r;
+        assign u1_q = u1_r;
+        assign v_q  = v_r;
+    end endgenerate
 
     wire ntt_go = (state == NTT0_GO) || (state == NTT1_GO);
     wire ntt_we = (state == LD0_WR) || (state == LD1_WR);
@@ -92,19 +119,19 @@ module decryption_ntt#(
     wire [COEFF_W-1:0] intt_rdata;
     wire intt_done;
     
-    ntt_core u_ntt (
+    ntt_core #(.PIPELINED(PIPELINED)) u_ntt (
     .clk(clk), .rst(rst), .go(ntt_go), .done(ntt_done),
     .ext_we(ntt_we), .ext_addr(k), .ext_wdata(ntt_wdata), .ext_rdata(ntt_rdata)
     );
 
-    basemul_core u_bm (
+    basemul_core #(.PIPELINED(PIPELINED)) u_bm (
     .clk(clk), .rst(rst), .go(bm_go), .done(bm_done),
     .ext_we(bm_we), .ext_sel(bm_sel), .ext_addr(k),
     .ext_wdata(ntt_rdata),
     .ext_rdata(bm_rdata)
     );
 
-    intt_core u_intt (
+    intt_core #(.PIPELINED(PIPELINED)) u_intt (
     .clk(clk), .rst(rst), .go(intt_go), .done(intt_done),
     .ext_we(intt_we), .ext_addr(k),
     .ext_wdata(bm_rdata), .ext_rdata(intt_rdata)

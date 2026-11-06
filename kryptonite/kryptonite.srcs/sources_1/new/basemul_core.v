@@ -26,7 +26,11 @@ module basemul_core #(
     parameter ADDR_W = 8,
     parameter Q = 3329,
     parameter INIT_U0 = "",
-    parameter INIT_U1 = ""
+    parameter INIT_U1 = "",
+    // PIPELINED = 1 (Khushi): each modular multiply goes through Shrikkanth's
+    // five-stage mod_mult_pipeline instead of a multiply + Barrett reduction in
+    // one clock, so the core meets 100 MHz. Same results, a few clocks slower.
+    parameter PIPELINED = 0
 )( input clk, rst, go, ext_we, ext_sel, 
  input [ADDR_W-1:0] ext_addr,
  input [COEFF_W-1:0] ext_wdata,
@@ -94,11 +98,21 @@ module basemul_core #(
     wire [23:0] m01 = a0 * b1;
     wire [23:0] mg = r11 * gamma_q;
 
-    barrett_reduce red00(.x(m00),.r(m00_r));
-    barrett_reduce red01(.x(m01),.r(m01_r));
-    barrett_reduce red10(.x(m10),.r(m10_r));
-    barrett_reduce red11(.x(m11),.r(m11_r));
-    barrett_reduce redg(.x(mg),.r(mg_r));
+    generate if (PIPELINED) begin : pipelined_mults
+        mod_mult_pipeline pm00(.clk(clk), .a(a0),  .b(b0),      .r(m00_r));
+        mod_mult_pipeline pm01(.clk(clk), .a(a0),  .b(b1),      .r(m01_r));
+        mod_mult_pipeline pm10(.clk(clk), .a(a1),  .b(b0),      .r(m10_r));
+        mod_mult_pipeline pm11(.clk(clk), .a(a1),  .b(b1),      .r(m11_r));
+        mod_mult_pipeline pmg (.clk(clk), .a(r11), .b(gamma_q), .r(mg_r));
+    end else begin : combinational_mults
+        barrett_reduce red00(.x(m00),.r(m00_r));
+        barrett_reduce red01(.x(m01),.r(m01_r));
+        barrett_reduce red10(.x(m10),.r(m10_r));
+        barrett_reduce red11(.x(m11),.r(m11_r));
+        barrett_reduce redg(.x(mg),.r(mg_r));
+    end endgenerate
+    // pipelined mode: wait for the 5-stage multipliers (operands are held steady)
+    reg [2:0] pw;
     
     wire [COEFF_W:0] c0_t1 = c0 + r00;
     wire [COEFF_W-1:0] c0_s1 = (c0_t1 >= Q)? c0_t1 - Q : c0_t1;
@@ -129,18 +143,22 @@ module basemul_core #(
                 p <= 0;
                 state <= READ;
             end
-            READ: state <= MUL;
-            MUL: begin
+            READ: begin
+                pw <= 3'd6;
+                state <= MUL;
+            end
+            MUL: if (!PIPELINED || pw == 3'd0) begin
                 r00 <= m00_r;
                 r01 <= m01_r;
                 r10 <= m10_r;
                 r11 <= m11_r;
+                pw <= 3'd6;
                 state <= GAMMA;
-            end
-            GAMMA: begin
+            end else pw <= pw - 3'd1;
+            GAMMA: if (!PIPELINED || pw == 3'd0) begin
                 r11g <= mg_r;
                 state <= ACC;
-            end
+            end else pw <= pw - 3'd1;
             ACC: begin
                 c0 <= c0_next;
                 c1 <= c1_next;

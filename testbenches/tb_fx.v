@@ -19,7 +19,7 @@ module tb_fx;
   reg [2:0] state = 0; reg role_kb = 0; reg [3:0] digit = 7; reg rx_hex = 0;
   reg [127:0] msg = 0, rx_log = 0; reg [4:0] msg_len = 0, rx_n = 0;
   reg [319:0] grid = 0; reg [6:0] cur_x = 40; reg [5:0] cur_y = 30; reg [1:0] bsel = 2;
-  reg link_busy = 0, link_ok = 0, rx_new = 0, replay = 0;
+  reg link_busy = 0, link_ok = 0, rx_new = 0, replay = 0, enc_go = 0;
   reg oink = 0;
 
   ui_screen #(.MAXLEN(16)) ui (.px(px_w), .py(py), .state(state), .digit(digit),
@@ -31,7 +31,7 @@ module tb_fx;
      .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
      .state(state), .digit(digit), .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
      .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel(bsel),
-     .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new), .replay(replay));
+     .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new), .replay(replay), .enc_go(enc_go));
 
   integer f, i, x, y;
   task snap; input [8*40-1:0] name;
@@ -67,27 +67,29 @@ module tb_fx;
     frames(40); snap("frames/06_result_settled.ppm");
     // RX screen, nothing received yet: rain
     state = 4; rx_n = 0; frames(45); snap("frames/07_rx_rain.ppm"); frames(10); snap("frames/08_rx_rain_b.ppm");
-    // message arrives: scramble style ("hello kryptonite", 16 bytes, byte 0 first)
-    rx_log = "etinotpyrk olleh"; rx_n = 16;
+    // message arrives (digits only now): style 0 = ciphertext -> particles -> message
+    rx_log = "6538291475903142"; rx_n = 16;
     style = 0; pulse_rx;
-    frames(3);  snap("frames/09_scramble_t03.ppm");
-    frames(12); snap("frames/10_scramble_t15.ppm");
-    frames(15); snap("frames/11_scramble_t30.ppm");
-    frames(80); snap("frames/12_scramble_done.ppm");
-    // particle assemble style (replay)
+    frames(4);  snap("frames/09_cipher_flicker.ppm");
+    frames(14); snap("frames/10_cipher_shown.ppm");
+    frames(10); snap("frames/11_cipher_burst.ppm");
+    frames(10); snap("frames/12_cipher_scattered.ppm");
+    frames(20); snap("frames/13_assemble_t06.ppm");
+    frames(10); snap("frames/14_assemble_t16.ppm");
+    frames(12); snap("frames/15_assemble_t28.ppm");
+    frames(70); snap("frames/16_reveal_done.ppm");
+    // style 1 = scramble-then-lock (replay)
     style = 1; pulse_replay;
-    frames(2);  snap("frames/13_assemble_t02.ppm");
-    frames(10); snap("frames/14_assemble_t12.ppm");
-    frames(10); snap("frames/15_assemble_t22.ppm");
-    frames(12); snap("frames/16_assemble_t34.ppm");
-    frames(40); snap("frames/17_assemble_done.ppm");
+    frames(30); snap("frames/17_scramble_t30.ppm");
     // sender (keyboard board COMPOSE screen): delivery fireworks
-    state = 5; role_kb = 1; msg = "IH"; msg_len = 2; frames(45);
-    @(negedge clk) link_ok = 1;
-    frames(4);  snap("frames/18_fireworks_t04.ppm");
-    frames(10); snap("frames/19_fireworks_t14.ppm");
-    frames(14); snap("frames/20_fireworks_t28.ppm");
-    frames(20); snap("frames/21_fireworks_t48.ppm");
+    // press send: encrypt rain, delivered during it, fireworks after it
+    state = 5; role_kb = 1; msg = "4321"; msg_len = 4; frames(45);
+    @(negedge clk) enc_go = 1; @(negedge clk) enc_go = 0; link_busy = 1;
+    frames(20); snap("frames/18_encrypt_rain.ppm");
+    link_busy = 0; @(negedge clk) link_ok = 1;
+    frames(40); snap("frames/19_encrypt_rain_b.ppm");
+    frames(40); snap("frames/20_fireworks_t10.ppm");
+    frames(20); snap("frames/21_fireworks_t30.ppm");
     // slide-in: go to the RX screen
     link_ok = 0; state = 4; frames(3); snap("frames/22_slide_t03.ppm"); frames(6); snap("frames/23_slide_t09.ppm");
     // effects off: plain UI

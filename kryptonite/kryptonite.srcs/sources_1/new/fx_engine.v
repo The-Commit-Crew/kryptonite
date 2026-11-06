@@ -16,10 +16,16 @@
 //                                       x -= y/8, y += x/8 each frame
 //  RESULT  "what the model saw"         the 8x8 greyscale grid, 4x4 px cells
 //  RESULT  digit drops in               vertical offset follows the spring
-//  RX      decrypt reveal, style 0:     each character flickers through
+//  MSG /   encrypt rain                 pressing send turns the message
+//  COMPOSE                              into falling hex for >= 1.5 s (and
+//                                       while the link is busy); fireworks
+//                                       wait until the rain has cleared
+//  RX      decrypt reveal, style 0:     a line of hex ciphertext appears,
+//  (text)  ciphertext -> particles      bursts into particles, and the
+//          -> plaintext                 particles fly together into the
+//                                       decrypted message (fx_particles)
+//  RX      decrypt reveal, style 1:     each character flickers through
 //  (text)  scramble-then-lock           random hex, then locks left to right
-//  RX      decrypt reveal, style 1:     the text assembles from flying
-//  (text)  particle assembly            particles (fx_particles)
 //  RX      sparkle dust                 random sparks whose density halves
 //                                       every 10 frames (exponential decay)
 //  RX      ciphertext rain              falling hex columns while nothing
@@ -63,7 +69,8 @@ module fx_engine #(
     input  wire        link_busy,
     input  wire        link_ok,            // level: last send was delivered
     input  wire        rx_new,             // pulse: a new message arrived
-    input  wire        replay              // pulse: play the decrypt reveal again
+    input  wire        replay,             // pulse: play the decrypt reveal again
+    input  wire        enc_go              // pulse: the user pressed send (encrypt)
 );
     localparam S_DRAW = 3'd0, S_WAIT = 3'd1, S_RESULT = 3'd2, S_MSG = 3'd3, S_RX = 3'd4,
                S_COMPOSE = 3'd5;
@@ -128,19 +135,32 @@ module fx_engine #(
     reg        fresh;                      // a message arrived that hasn't been revealed
     reg        ok_q;
     reg        fw_go;
+    reg        enc_run;                    // encrypt rain running
+    reg  [7:0] enc_t;                      // frames into it
+    reg        fw_pend;                    // delivered during the rain: fireworks after
+    reg [15:0] cseed;                      // picks this reveal's fake ciphertext
 
     wire slide_on = en && (slide_n < 6'd40);
     wire drop_on  = en && (drop_n  < 6'd40) && (state == S_RESULT);
 
     wire [4:0] dlen = rx_n;                // the reveal plays on the received message
     wire       rx_text = (state == S_RX) && !rx_hex;
-    wire [7:0] dec_end = dec_style ? 8'd80 : (8'd24 + {dlen, 2'b00} + {3'd0, dlen});  // 24 + 5*len
+    // style 0 phases (frames): A 0..23 ciphertext shown, B 24..51 it explodes,
+    // C 52..131 particles assemble into the plaintext
+    localparam [7:0] PH_B = 8'd24, PH_C = 8'd52, DEC0_END = 8'd132;
+    wire [7:0] dec_end = dec_style ? (8'd24 + {dlen, 2'b00} + {3'd0, dlen})     // 24 + 5*len
+                                   : DEC0_END;
+    wire       ph_a = dec_run && !dec_style && (dec_t <  PH_B);
+    wire       ph_b = dec_run && !dec_style && (dec_t >= PH_B) && (dec_t < PH_C);
+    wire       ph_c = dec_run && !dec_style && (dec_t >= PH_C);
+    wire       on_send_screen = (state == S_MSG) || (state == S_COMPOSE);
 
     always @(posedge clk) begin
         fw_go <= 1'b0;
         if (rst) begin
             prev_state <= S_DRAW; slide_n <= 6'd63; drop_n <= 6'd63;
             dec_t <= 0; dec_run <= 1'b0; dec_style <= 1'b0; fresh <= 1'b0; ok_q <= 1'b0;
+            enc_run <= 1'b0; enc_t <= 8'd0; fw_pend <= 1'b0; cseed <= 16'd0;
         end else begin
             prev_state <= state;
             ok_q <= link_ok;
@@ -150,6 +170,7 @@ module fx_engine #(
                 if (state == S_RESULT)                     drop_n  <= 6'd0;
                 else if (state != S_WAIT && prev_state != S_WAIT) slide_n <= 6'd0;
                 if (state != S_RX) dec_run <= 1'b0;
+                enc_run <= 1'b0; fw_pend <= 1'b0;
             end else if (tick) begin
                 if (slide_n != 6'd63) slide_n <= slide_n + 6'd1;
                 if (drop_n  != 6'd63) drop_n  <= drop_n + 6'd1;
@@ -163,13 +184,30 @@ module fx_engine #(
                 dec_t     <= 8'd0;
                 dec_style <= style;
                 fresh     <= 1'b0;
+                cseed     <= fcount;
             end else if (dec_run && tick) begin
                 if (dec_t >= dec_end) dec_run <= 1'b0;
                 else                  dec_t <= dec_t + 8'd1;
             end
 
-            // fireworks when our message is delivered (link_ok goes 0 -> 1)
-            if (en && link_ok && !ok_q && (state == S_MSG || state == S_COMPOSE)) fw_go <= 1'b1;
+            // encrypt rain: starts on send, runs at least 90 frames (1.5 s) and
+            // for as long as the link is still busy
+            if (en && enc_go && on_send_screen) begin
+                enc_run <= 1'b1; enc_t <= 8'd0;
+            end else if (enc_run && tick) begin
+                if (enc_t != 8'd255) enc_t <= enc_t + 8'd1;
+                if (enc_t >= 8'd90 && !link_busy) begin
+                    enc_run <= 1'b0;
+                    if (fw_pend) begin fw_go <= 1'b1; fw_pend <= 1'b0; end
+                end
+            end
+
+            // fireworks when our message is delivered (link_ok goes 0 -> 1),
+            // held back until the encrypt rain has finished
+            if (en && link_ok && !ok_q && on_send_screen) begin
+                if (enc_run) fw_pend <= 1'b1;
+                else         fw_go   <= 1'b1;
+            end
         end
     end
 
@@ -192,12 +230,27 @@ module fx_engine #(
         end
     endgenerate
 
-    wire asm_on = dec_run && dec_style;
+    // fake ciphertext for phase A/B: random hex, fixed for the whole reveal
+    wire [63:0] cip_r1, cip_r2;
+    generate
+        for (k = 0; k < 8; k = k + 1) begin : g_cip
+            wire [15:0] c1 = mix(cseed ^ ((dec_t < 8'd12) ? {8'd0, dec_t[7:1]} : 16'd0), k);
+            wire [15:0] c2 = mix(cseed ^ ((dec_t < 8'd12) ? {8'd0, dec_t[7:1]} : 16'd0), k + 8);
+            assign cip_r1[(7-k)*8 +: 8] = (k < dlen)       ? h2a(c1[3:0]) : 8'h20;
+            assign cip_r2[(7-k)*8 +: 8] = ((k + 8) < dlen) ? h2a(c2[3:0]) : 8'h20;
+        end
+    endgenerate
+
+    wire       asm_on   = ph_b || ph_c;
+    wire       asm_expl = ph_b;
+    wire [7:0] asm_t    = ph_b ? (dec_t - PH_B) : (dec_t - PH_C);
+    wire [63:0] p_r1    = ph_b ? cip_r1 : real_r1;
+    wire [63:0] p_r2    = ph_b ? cip_r2 : real_r2;
     wire [3:0] fb_c;
     wire fw_busy;
     fx_particles u_part (
         .clk(clk), .rst(rst), .tick(tick),
-        .asm_on(asm_on), .asm_t(dec_t), .row1_chars(real_r1), .row2_chars(real_r2),
+        .asm_on(asm_on), .asm_explode(asm_expl), .asm_t(asm_t), .row1_chars(p_r1), .row2_chars(p_r2),
         .fw_start(fw_go), .fw_busy(fw_busy),
         .rd_x(px), .rd_y(py), .rd_color(fb_c));
 
@@ -206,7 +259,7 @@ module fx_engine #(
         case (fb_c)
             4'd1: fb_rgb = CYAN;   4'd2: fb_rgb = WHITE;  4'd3: fb_rgb = YELLOW;
             4'd4: fb_rgb = ORANGE; 4'd5: fb_rgb = RED;    4'd6: fb_rgb = DRED;
-            4'd7: fb_rgb = VIOLET; default: fb_rgb = BLACK;
+            4'd7: fb_rgb = VIOLET; 4'd8: fb_rgb = GREEN;  default: fb_rgb = BLACK;
         endcase
     end
 
@@ -225,8 +278,11 @@ module fx_engine #(
         end
     endgenerate
     wire scr_on1, scr_on2;
-    text_line #(.N(8), .X0(0), .Y0(14), .SCALE(2)) u_sc1 (.px(px), .py(py), .chars(scr_r1), .on(scr_on1));
-    text_line #(.N(8), .X0(0), .Y0(32), .SCALE(2)) u_sc2 (.px(px), .py(py), .chars(scr_r2), .on(scr_on2));
+    // the same two text lines show the scramble (style 1) or the ciphertext (style 0, phase A)
+    wire [63:0] tl_r1 = dec_style ? scr_r1 : cip_r1;
+    wire [63:0] tl_r2 = dec_style ? scr_r2 : cip_r2;
+    text_line #(.N(8), .X0(0), .Y0(14), .SCALE(2)) u_sc1 (.px(px), .py(py), .chars(tl_r1), .on(scr_on1));
+    text_line #(.N(8), .X0(0), .Y0(32), .SCALE(2)) u_sc2 (.px(px), .py(py), .chars(tl_r2), .on(scr_on2));
 
     // which character is this pixel in, and is it locked yet?
     wire [3:0] ck   = px / 12 + ((py >= 6'd32) ? 4'd8 : 4'd0);
@@ -237,10 +293,12 @@ module fx_engine #(
 
     //================================================================ sparkle dust
     // density starts at 48/256 of pixels and halves every 10 frames
-    wire [3:0]  halvings = (dec_t > 8'd79) ? 4'd8 : (dec_t / 10);
+    wire [7:0]  sp_t     = dec_style ? dec_t : (ph_c ? (dec_t - PH_C) : 8'd200);
+    wire [3:0]  halvings = (sp_t > 8'd79) ? 4'd8 : (sp_t / 10);
     wire [7:0]  density  = 8'd48 >> halvings;
     wire [15:0] hs       = mix({px, py, 3'd0}, {8'd0, dec_t[7:1]});
-    wire        spark    = dec_run && (py >= 6'd8) && (py < 6'd52) && (hs[7:0] < density);
+    wire        spark    = dec_run && (dec_style || ph_c) &&
+                           (py >= 6'd8) && (py < 6'd52) && (hs[7:0] < density);
     wire [15:0] spark_rgb = hs[9] ? (hs[8] ? WHITE : YELLOW) : CYAN;
 
     //================================================================ ciphertext rain
@@ -269,7 +327,8 @@ module fx_engine #(
                            (rdist < 9'sd10) ? 16'h07E0 :     // bright green
                            (rdist < 9'sd18) ? 16'h0400 :     // mid green
                                               16'h0200;      // faint tail
-    wire rain_on = (state == S_RX) && (rx_n == 5'd0) && (py >= 6'd9) && (py < 6'd51);
+    wire rain_on = (((state == S_RX) && (rx_n == 5'd0)) || (on_send_screen && enc_run)) &&
+                   (py >= 6'd9) && (py < 6'd51);
 
     //================================================================ spinner
     // Minsky circle: x -= y/4, then y += x/4 (with the new x). Only shifts and
@@ -371,6 +430,9 @@ module fx_engine #(
                 else if (drop_on && in_big_col) pdata = (big_on && pyd_ok) ? WHITE : BLACK;
             end
             S_MSG, S_COMPOSE: begin
+                // encrypting: the message rows dissolve into the hex rain
+                if (enc_run && in_rows) pdata = BLACK;
+                if (pdata == BLACK && rain_on && rain_px) pdata = rain_rgb;
                 if (spin_on) begin
                     if      (spin0) pdata = WHITE;
                     else if (spin1) pdata = CYAN;
@@ -380,10 +442,13 @@ module fx_engine #(
             S_RX: begin
                 // decrypt reveal replaces the message rows while it runs
                 if (dec_run && in_rows) begin
-                    if (dec_style) pdata = BLACK;
-                    else if (scr_on1 || scr_on2)
-                        pdata = !locked ? GREEN : (just_lock ? YELLOW : WHITE);
-                    else pdata = BLACK;
+                    if (dec_style) begin                       // scramble-then-lock
+                        if (scr_on1 || scr_on2)
+                            pdata = !locked ? GREEN : (just_lock ? YELLOW : WHITE);
+                        else pdata = BLACK;
+                    end else if (ph_a && (scr_on1 || scr_on2))   // the ciphertext
+                        pdata = (dec_t < 8'd12) ? 16'h07E0 : 16'hAFF5;
+                    else pdata = BLACK;                        // particles draw B and C
                 end
                 if (pdata == BLACK && spark) pdata = spark_rgb;
                 if (pdata == BLACK && rain_on && rain_px) pdata = rain_rgb;
