@@ -61,7 +61,7 @@ module tb_encrypt;
         .ciphertext_addr(ciphertext_addr), .ciphertext_data(ciphertext_data)
     );
 
-    poly_mult_model multiplier (
+    shared_poly_multiplier multiplier (
         .clk(clk), .rst(rst), .wr_en(mul_wr_en), .wr_addr(mul_wr_addr),
         .left_data(mul_left), .right_data(mul_right), .start(mul_start), .done(mul_done),
         .rd_addr(mul_rd_addr), .rd_data(mul_rd_data)
@@ -225,7 +225,7 @@ module tb_encrypt;
     end
 
     initial begin
-        #400000;
+        #6000000;
         $fatal(1, "Encryption simulation timed out");
     end
 endmodule
