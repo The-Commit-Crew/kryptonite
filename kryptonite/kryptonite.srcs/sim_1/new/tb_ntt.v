@@ -24,7 +24,7 @@ module tb_ntt( );
     reg clk = 0, rst = 1, go = 0;
     wire done;
     always #5 clk = ~clk;
-    ntt_core dut (.clk(clk), .rst(rst), .go(go), .done(done));
+    ntt_core #(.INIT_FILE("u0.mem")) dut (.clk(clk), .rst(rst), .go(go), .done(done));
 
     reg [11:0] exp [0:7*256-1];
     initial begin

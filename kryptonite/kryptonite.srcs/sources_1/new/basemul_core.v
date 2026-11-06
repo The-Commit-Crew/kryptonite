@@ -24,8 +24,14 @@ module basemul_core #(
     parameter N = 256,
     parameter COEFF_W = 12,
     parameter ADDR_W = 8,
-    parameter Q = 3329
-)( input clk, rst, go, output done );
+    parameter Q = 3329,
+    parameter INIT_U0 = "",
+    parameter INIT_U1 = ""
+)( input clk, rst, go, ext_we, ext_sel, 
+ input [ADDR_W-1:0] ext_addr,
+ input [COEFF_W-1:0] ext_wdata,
+ output [COEFF_W-1:0] ext_rdata,
+ output done );
     reg [COEFF_W-1:0] s0_hat [0:N-1];
     reg [COEFF_W-1:0] s1_hat [0:N-1];
     reg [COEFF_W-1:0] u0_hat [0:N-1];
@@ -36,16 +42,24 @@ module basemul_core #(
     initial begin
         $readmemh("s0_hat.mem", s0_hat);
         $readmemh("s1_hat.mem", s1_hat);
-        $readmemh("u0_hat.mem", u0_hat);
-        $readmemh("u1_hat.mem", u1_hat);
+        if (INIT_U0 != "")$readmemh(INIT_U0, u0_hat);
+        if (INIT_U1 != "")$readmemh(INIT_U1, u1_hat);
         $readmemh("gammas.mem", gammas);
     end
+    
+    localparam IDLE = 4'd0, INIT = 4'd1, READ = 4'd2, MUL = 4'd3, GAMMA = 4'd4, ACC = 4'd5, WRITE0 = 4'd6, WRITE1 = 4'd7, DONE = 4'd8;
+    reg [3:0] state = IDLE;
+    assign done = (state == DONE);
+    wire busy = (state != IDLE) && (state != DONE);
+    
     reg [ADDR_W-2:0] i;
     reg p;
     wire [ADDR_W-1:0] addr0 = {i, 1'b0};
     wire [ADDR_W-1:0] addr1 = {i, 1'b1};
-    
     reg [COEFF_W-1:0] s0a_q, s0b_q, s1a_q, s1b_q, u0a_q, u0b_q, u1a_q, u1b_q, gamma_q;
+    
+    reg [COEFF_W-1:0] prod_q;
+    
     always @(posedge clk) begin
         s0a_q <= s0_hat[addr0];
         s0b_q <= s0_hat[addr1];
@@ -56,7 +70,18 @@ module basemul_core #(
         u1a_q <= u1_hat[addr0];
         u1b_q <= u1_hat[addr1];
         gamma_q <= gammas[i];
+        prod_q <= prod[ext_addr];
     end
+    
+    assign ext_rdata = prod_q;
+    
+    always @ (posedge clk) begin
+        if (!busy && ext_we) begin
+            if (ext_sel) u1_hat[ext_addr] <= ext_wdata;
+            else u0_hat[ext_addr] <= ext_wdata;
+        end
+    end
+    
     wire [COEFF_W-1:0] m00_r, m01_r, m10_r, m11_r, mg_r;
     reg [COEFF_W-1:0] r00, r01, r10, r11, r11g, c0, c1;
     wire [COEFF_W-1:0] a0 = p?s1a_q:s0a_q;
@@ -85,9 +110,7 @@ module basemul_core #(
     wire [COEFF_W:0] c1_t2 = c1_s1 + r10;
     wire [COEFF_W-1:0] c1_next = (c1_t2 >= Q)? c1_t2 - Q : c1_t2;
     
-    localparam IDLE = 4'd0, INIT = 4'd1, READ = 4'd2, MUL = 4'd3, GAMMA = 4'd4, ACC = 4'd5, WRITE0 = 4'd6, WRITE1 = 4'd7, DONE = 4'd8;
-    reg [3:0] state = IDLE;
-    assign done = (state == DONE);
+    
     
     always @ (posedge clk) begin
         if(rst) begin
