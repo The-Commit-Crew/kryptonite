@@ -1,159 +1,92 @@
 # ML Engine: TinyML Digit Classifier & FPGA Memory Exporter
 
-The `ml_engine` directory contains the machine learning pipeline for **Kryptonite**, a hardware-accelerated TinyML deployment targeted for the **Digilent Basys 3 FPGA (Xilinx Artix-7)**.
+The `ml_engine` folder trains the handwritten digit classifier for **Kryptonite** and exports its weights as `.mem` files for `tinyml_core.v` on the **Basys 3 (Artix-7)**.
 
-It provides end-to-end tooling to prepare the dataset, define and train a lightweight Multi-Layer Perceptron (MLP) neural network, serialize trained weights, and quantize parameters into 16-bit fixed-point (Q8.8) hexadecimal memory (`.mem`) files ready for FPGA BRAM/ROM initialization via Verilog's `$readmemh`.
+The model is a small neural network: 64 inputs (the 8x8 grid from the board), one hidden layer of 64 neurons with ReLU, and 10 outputs (digits 0 to 9).
 
----
+## What changed (Nov 2026)
 
-## Architecture & Hardware Pipeline Overview
+| | Before | Now |
+| :-- | :-- | :-- |
+| Training data | scikit-learn digits only (1,797 digits, 43 writers) | MNIST converted to board-style grids (120k) + scikit-learn digits (+ board drawings if `drawings.npz` exists) |
+| Hidden neurons | 16 | 64 (a 32-neuron backup is in `mem_files_h32/`) |
+| Testing | none (trained and tested on the same data) | separate validation and test sets, confusion matrix |
+| Accuracy on board-style MNIST test digits (5x5 brush, FPGA maths) | 53% (0s: 24%, 6s: 42%) | 97.2% (0s: 98.4%, 6s: 97.4%, 8s: 94.4%) |
+| Output bias in hardware | added without the needed `<< 8` | `verify_hw.py` models the fixed Verilog |
 
-```
- ┌──────────────────────┐
- │ Scikit-Learn Digits  │ (8x8 grayscale images, 64 features)
- └──────────┬───────────┘
-            │
-            ▼
- ┌──────────────────────┐
- │ data_setup.py        │ Flattens to (N, 64), creates PyTorch DataLoader
- └──────────┬───────────┘
-            │
-            ▼
- ┌──────────────────────┐
- │ model.py (TinyMLP)   │ Linear(64, 16) -> ReLU -> Linear(16, 10)
- └──────────┬───────────┘ [Total: 1,210 parameters]
-            │
-            ▼
- ┌──────────────────────┐
- │ train.py             │ 100 Epochs, Adam (lr=0.001), CrossEntropyLoss
- └──────────┬───────────┘ Generates: tinyml_weights.pth
-            │
-            ▼
- ┌──────────────────────┐
- │ export_weights.py    │ Q8.8 Quantization (scale * 256), 16-bit 2's complement
- └──────────┬───────────┘
-            │
-            ▼
- ┌──────────────────────┐
- │ mem_files/ (*.mem)   │ hw.mem, hb.mem, ow.mem, ob.mem
- └──────────┬───────────┘
-            │
-            ▼
- ┌──────────────────────┐
- │ Basys 3 FPGA (RTL)   │ Verilog $readmemh initialization into BRAM / ROM
- └──────────────────────┘
-```
-
----
-
-## Directory Structure
+## Pipeline
 
 ```
-ml_engine/
-├── data_setup.py          # Dataset loading, preprocessing, and DataLoader generator
-├── model.py               # PyTorch neural network definition (TinyMLP)
-├── train.py               # Model training script and checkpoint exporter
-├── export_weights.py      # Fixed-point quantization & Verilog .mem file generator
-├── requirements.txt       # Python dependencies (PyTorch, scikit-learn, etc.)
-├── tinyml_weights.pth     # Serialized PyTorch model weights (1,210 parameters)
-├── mem_files/             # Exported 16-bit hexadecimal memory initialization files
-│   ├── hw.mem             # Hidden layer weights (1,024 words)
-│   ├── hb.mem             # Hidden layer biases (16 words)
-│   ├── ow.mem             # Output layer weights (160 words)
-│   └── ob.mem             # Output layer biases (10 words)
-└── README.md              # Documentation of the ML engine
+MNIST (28x28)  --prepare_mnist.py-->  board-style 8x8 grids (values 0..16)
+                                              |
+scikit-learn digits (8x8, 0..16) -------------+---- data_setup.py
+board drawings (drawings.npz, optional) ------+
+                                              |
+                                          train.py   -> tinyml_weights.pth
+                                              |
+                                     export_weights.py -> mem_files/*.mem
+                                              |
+                                        verify_hw.py  -> checks + testbench vectors
 ```
 
----
+## Files
 
-## Detailed Components
+| File | What it does |
+| :-- | :-- |
+| `preprocess.py` | Exact Python copy of `stroke_engine.v` + `downsampler.v` (unchanged) |
+| `prepare_mnist.py` | Makes MNIST look like board drawings, saves `mnist_board.npz` |
+| `data_setup.py` | Combines all data sources, holds back validation sets |
+| `model.py` | `TinyMLP`; `DEFAULT_HIDDEN` must match `HIDDEN_NODES` in `tinyml_core.v` |
+| `train.py` | Trains, keeps the best epoch, reports PyTorch and FPGA accuracy |
+| `hw_model.py` | The FPGA's whole-number maths in Python |
+| `export_weights.py` | Writes the four `.mem` files (Q8.8, 16-bit) into `mem_files/` |
+| `verify_hw.py` | Checks `.mem` files against the model, writes testbench vectors |
+| `capture_grids.py` | Saves real board drawings to `drawings.npz` (used automatically if present) |
 
-### 1. Data Pipeline (`data_setup.py`)
+## How MNIST is made to look like the board
 
-- **Dataset:** Scikit-Learn `load_digits()` (1,797 samples of 8x8 pixel grayscale handwritten digits, values ranging 0–16).
-- **Preprocessing:**
-  - Flattens each 8x8 2D matrix into a 1D feature vector of length 64.
-  - Converts pixel values to `torch.float32` tensors and target labels to `torch.long`.
-- **Dataloader:** Wraps tensors into a `TensorDataset` and returns a batched, shuffled PyTorch `DataLoader` (default `batch_size=32`).
-- **Standalone Execution:** Run `python3 data_setup.py` to inspect the batch shapes and raw pixel vectors.
+For each MNIST digit, `prepare_mnist.py`:
 
-### 2. Neural Network Architecture (`model.py`)
+1. applies small random changes: tilt (up to 12 degrees), slant, wider or narrower, and a random height of 26 to 60 pixels (the OLED is 64 tall)
+2. makes it black and white (pixel >= 128 is ink, same as `mnist_to_grid`)
+3. thins the strokes to a 1-pixel line
+4. redraws the line with a square brush like `stroke_engine.v` (5x5 most of the time, some 3x3 and 7x7)
+5. downsamples with the same maths as `downsampler.v` (checked bit for bit against `preprocess.image_to_grid`)
 
-Defined as `TinyMLP(nn.Module)`, the model is architected specifically for low-latency, low-footprint hardware acceleration on an FPGA:
+Inputs stay as whole numbers 0 to 16, exactly what the board sends. Do not divide or normalise them (no `ToTensor()` / `Normalize()`), or the model will expect different numbers from what the hardware gives it.
 
-| Layer            | Type        | Input Dimensions | Output Dimensions       | Parameters                                  |
-| :--------------- | :---------- | :--------------- | :---------------------- | :------------------------------------------ |
-| **Hidden Layer** | `nn.Linear` | 64 features      | 16 neurons              | $16 \times 64 = 1,024$ weights, $16$ biases |
-| **Activation**   | `nn.ReLU`   | 16               | 16                      | 0                                           |
-| **Output Layer** | `nn.Linear` | 16 neurons       | 10 classes (digits 0–9) | $10 \times 16 = 160$ weights, $10$ biases   |
-| **Total**        |             |                  |                         | **1,210 parameters**                        |
-
-- **Standalone Execution:** Run `python3 model.py` to verify the parameter count and input/output tensor shapes with dummy data.
-
-### 3. Model Training (`train.py`)
-
-- **Loss Function:** `nn.CrossEntropyLoss()` (computes softmax internally for multi-class classification).
-- **Optimizer:** `torch.optim.Adam` with learning rate $\alpha = 0.001$.
-- **Training Epochs:** 100 epochs across the full digits dataset.
-- **Output:** Saves the trained floating-point state dictionary to `tinyml_weights.pth`.
-
-### 4. Quantization & Hardware Memory Export (`export_weights.py`)
-
-Translates trained PyTorch floating-point tensors into fixed-point representations suitable for digital hardware:
-
-- **Number Representation:** Signed 16-bit fixed-point in **Q8.8 format** (1 sign bit, 7 integer bits, 8 fractional bits).
-- **Scaling Factor:** Multiplied by $2^8 = 256$ and rounded to nearest integer:
-  $$\text{param}_{\text{scaled}} = \lfloor \text{param} \times 256 + 0.5 \rfloor$$
-- **Two's Complement Encoding:** Formats negative and positive integers into 16-bit two's complement hexadecimal words using the bitmask `val & 0xFFFF`.
-- **Target Output:** 4 separate `.mem` files in `mem_files/` formatted as 4-character hex strings per line (`04X`), directly loadable in Verilog/SystemVerilog using `$readmemh`:
-
-| File               | Parameter Name        | PyTorch Shape | Format / Lines           |
-| :----------------- | :-------------------- | :------------ | :----------------------- |
-| `mem_files/hw.mem` | `hidden_layer.weight` | $(16, 64)$    | 1,024 lines (16-bit hex) |
-| `mem_files/hb.mem` | `hidden_layer.bias`   | $(16,)$       | 16 lines (16-bit hex)    |
-| `mem_files/ow.mem` | `output_layer.weight` | $(10, 16)$    | 160 lines (16-bit hex)   |
-| `mem_files/ob.mem` | `output_layer.bias`   | $(10,)$       | 10 lines (16-bit hex)    |
-
----
-
-## How to Run & Reproduce
-
-### 1. Environment Setup
-
-From the `ml_engine` directory, initialize a Python virtual environment and install requirements:
+## How to run
 
 ```bash
 cd ml_engine
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv
+venv\Scripts\activate            # Windows  (source venv/bin/activate on Linux/macOS)
 pip install -r requirements.txt
+
+python prepare_mnist.py          # about 1-3 min, downloads MNIST the first time
+python train.py                  # about 1-2 min, saves tinyml_weights.pth
+python export_weights.py         # writes mem_files/*.mem
+python verify_hw.py              # checks the .mem files, writes testbench vectors
 ```
 
-### 2. Train the Model
+Then copy `mem_files/hw.mem`, `hb.mem`, `ow.mem`, `ob.mem` into `kryptonite/kryptonite.srcs/sources_1/imports/mem_files/`.
 
-Train `TinyMLP` on the digits dataset and export `tinyml_weights.pth`:
+Options: `python train.py --hidden 32` trains a smaller model; `python export_weights.py --weights tinyml_weights_h32.pth --out-dir mem_files_h32` exports it.
 
-```bash
-python3 train.py
-```
+## Results (seed 0)
 
-### 3. Export Hardware Memory Files
+| Hidden neurons | MNIST test, 3x3 brush | 5x5 brush | 7x7 brush | sklearn validation |
+| :-- | :-- | :-- | :-- | :-- |
+| 16 | 94.3% | 94.7% | 94.4% | 95.0% |
+| 32 | 96.3% | 96.5% | 96.2% | 97.8% |
+| **64 (chosen)** | **96.7%** | **97.2%** | **96.8%** | **98.9%** |
+| 128 | 97.0% | 97.3% | 97.2% | 98.3% |
 
-Generate the 16-bit hexadecimal `.mem` files for FPGA synthesis and simulation:
+All numbers use the FPGA's whole-number maths. 128 neurons doubles the hardware for about 0.1 to 0.3% more, so 64 was chosen.
 
-```bash
-python3 export_weights.py
-```
+## Hardware notes
 
----
-
-## Hardware RTL Integration Notes
-
-- **Memory Loading:** In your Verilog/SystemVerilog RTL testbench or synthesis modules:
-  ```verilog
-  reg [15:0] hidden_weights [0:1023];
-  initial begin
-      $readmemh("hw.mem", hidden_weights);
-  end
-  ```
-- **Arithmetic Alignment:** Because weights and biases are scaled by $256$ (Q8.8), multiplications with inputs scaled similarly will shift the fractional point by 16 bits ($Q8.8 \times Q8.8 = Q16.16$). Ensure the hardware MAC (Multiply-Accumulate) unit accounts for truncation/arithmetic right-shifts prior to ReLU and output classification.
+- **Number format:** every weight and bias is multiplied by 256 and stored as a signed 16-bit word (Q8.8).
+- **Scaling through the network:** pixels are whole numbers 0 to 16, so the hidden layer sums come out x256. The output layer multiplies x256 hidden values by x256 weights, so its sums come out x65536. The output bias is only x256, so the Verilog must shift it left by 8 before adding (`ob << 8`). `hw_model.py` shows the exact maths.
+- **Memory size:** with 64 hidden neurons, `hw.mem` has 4,096 words, `hb.mem` 64, `ow.mem` 640 and `ob.mem` 10. `HIDDEN_NODES` in `tinyml_core.v` must match.
+- **Testbench vectors:** `mem_files/tb_grids.mem` holds 50 grids, one 320-bit hex word per line (cell 0 in bits [4:0], same as the downsampler). `tb_expected.mem` holds the digit `tinyml_core` should output for each one.

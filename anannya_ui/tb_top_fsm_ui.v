@@ -18,14 +18,22 @@ module tb_top_fsm;
         .clk(clk), .rst(rst), .loopback(1'b1), .rx_pin(1'b1), .tx_pin(tx_pin),
         .send_req(send_req), .msg_in(msg_in), .msg_len_in(msg_len_in),
         .rx_clear(rx_clear), .send_ok(ok), .send_fail(fail), .tx_busy(busy),
-        .rx_log(rx_log), .rx_n(rx_n));
+        .rx_log(rx_log), .rx_n(rx_n),
+        // ports added for link stats, effects and the ciphertext path: unused here
+        .retry_req(1'b0), .mul_done(1'b0), .mul_rd_data(12'd0),
+        .fault_inject(1'b0), .ct_busy(1'b0), .ct_we(1'b0), .ct_wa(7'd0), .ct_wd(8'd0),
+        .ct_len(8'd0), .ct_type(8'd0), .ct_send(1'b0), .ct_ra(7'd0));
 
     // DUT 2: no loop, nothing answers -> must give up (short timeout keeps the sim fast)
     top_fsm #(.MAXLEN(16), .ACK_TIMEOUT(20000)) dut2 (
         .clk(clk), .rst(rst), .loopback(1'b0), .rx_pin(1'b1), .tx_pin(tx_pin2),
         .send_req(send_req2), .msg_in(msg_in), .msg_len_in(msg_len_in),
         .rx_clear(1'b0), .send_ok(ok2), .send_fail(fail2), .tx_busy(busy2),
-        .rx_log(rx_log2), .rx_n(rx_n2));
+        .rx_log(rx_log2), .rx_n(rx_n2),
+        // ports added for link stats, effects and the ciphertext path: unused here
+        .retry_req(1'b0), .mul_done(1'b0), .mul_rd_data(12'd0),
+        .fault_inject(1'b0), .ct_busy(1'b0), .ct_we(1'b0), .ct_wa(7'd0), .ct_wd(8'd0),
+        .ct_len(8'd0), .ct_type(8'd0), .ct_send(1'b0), .ct_ra(7'd0));
 
     // send a message on DUT 1 and wait for the result
     task send_msg;
