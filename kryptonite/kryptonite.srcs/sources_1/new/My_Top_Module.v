@@ -11,7 +11,7 @@
 // Integration top. Port names match the master .xdc.
 //   JA[0] = our TX (JA1), JA[1] = our RX (JA2)
 //   sw[15] reset, sw[14] debug, sw[13] board role (0 = MOUSE board, 1 = KEYBOARD board),
-//   sw[11:8] debug digit, sw[4] loopback, sw[2] RX screen: 1 = text / 0 = hex, sw[1:0] brush
+//   sw[11:8] debug digit, sw[4] loopback, sw[2] RX screen: 1 = text / 0 = hex, sw[0] brush: 0 = 5x5, 1 = 3x3
 //   After changing sw[13], press reset (sw[15]).
 //   KEYBOARD board: type to compose, Enter = send, Esc = clear, Backspace = delete,
 //                   Tab = COMPOSE -> RX text -> RX hex -> COMPOSE, btnD = clear received
@@ -311,7 +311,7 @@ module My_Top_Module #(
         .paint(m_left & in_draw),
         .erase(m_right & ~m_left & in_draw),
         .clear(ctrl_clear | (mid_pulse & in_draw)),
-        .brush_sel(sw[1:0]),
+        .brush_sel({~sw[0], sw[0]}),
         .submit(ctrl_submit),
         .oled_x(ox), .oled_y(oy), .oled_ink(oink),
         .has_ink(has_ink),
@@ -351,7 +351,7 @@ module My_Top_Module #(
         .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
         .state(scr_state), .digit(digit),
         .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
-        .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel(sw[1:0]),
+        .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel({~sw[0], sw[0]}),
         .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new),
         .replay(p_submit & (scr_state == 3'd4)));
 

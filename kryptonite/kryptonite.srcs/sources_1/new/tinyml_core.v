@@ -22,7 +22,7 @@
 
 module tinyml_core #(
     parameter INPUT_NODES = 64,
-    parameter HIDDEN_NODES = 16,
+    parameter HIDDEN_NODES = 64,
     parameter OUTPUT_NODES = 10
 )(
     input clk,
@@ -113,7 +113,7 @@ module tinyml_core #(
                         accumulator <= accumulator + (hidden_nodes[pixel_idx] * output_weights[(node_idx * HIDDEN_NODES) + pixel_idx]);
                         pixel_idx <= pixel_idx + 1;
                     end else begin
-                        output_scores[node_idx] <= accumulator + $signed(output_biases[node_idx]);
+                        output_scores[node_idx] <= accumulator + ($signed(output_biases[node_idx]) <<< 8);
                         accumulator <= 0;
                         pixel_idx <= 0;
                         node_idx <= node_idx + 1;

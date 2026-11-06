@@ -1,0 +1,3 @@
+# MNIST download and converted data (recreated by prepare_mnist.py)
+mnist_raw/
+mnist_board.npz
