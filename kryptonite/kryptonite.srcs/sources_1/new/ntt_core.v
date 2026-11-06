@@ -24,16 +24,27 @@ module ntt_core #(
     parameter N = 256,
     parameter COEFF_W = 12,
     parameter ADDR_W = 8,
-    parameter Q = 3329
-) ( input clk, rst, go, output done );
+    parameter Q = 3329,
+    parameter INIT_FILE = ""
+) ( input clk, rst, go, ext_we,
+ input [ADDR_W-1:0] ext_addr,
+ input [COEFF_W-1:0] ext_wdata,
+ output [COEFF_W-1:0] ext_rdata,
+ output done );
     
     reg [COEFF_W - 1:0] f [0:N-1];
     reg [COEFF_W - 1:0] zetas [0:N/2-1];
     
     initial begin
-        $readmemh("u0.mem", f);
+        if (INIT_FILE != "") $readmemh(INIT_FILE, f);
         $readmemh("zetas.mem", zetas);
     end
+    
+    localparam IDLE = 3'd0, READ = 3'd1, CALC = 3'd2, WRITE_A = 3'd3, WRITE_B = 3'd4, DONE = 3'd5;
+    reg [2:0] state = IDLE;
+    reg [COEFF_W-1:0] a_new, b_new;
+    assign done = (state == DONE);
+    wire busy = (state != IDLE) && (state != DONE);
     
     reg [ADDR_W-1:0] len, start, j;
     reg [ADDR_W-2:0] zk = 0;
@@ -42,30 +53,32 @@ module ntt_core #(
     wire [ADDR_W-1:0] addr_b = j+len;
     wire [ADDR_W-1:0] block_last = start + len - 1;
     wire [ADDR_W:0] next_start = start + (2*len);
+    wire [ADDR_W-1:0] rd_a = busy? addr_a:ext_addr;
     
     reg [COEFF_W - 1:0] fa_q, fb_q, zeta_q;
     
     always @(posedge clk) begin
-        fa_q <= f[addr_a];
+        fa_q <= f[rd_a];
         fb_q <= f[addr_b];
         zeta_q <= zetas[zk];
     end
     
-    localparam IDLE = 3'd0, READ = 3'd1, CALC = 3'd2, WRITE_A = 3'd3, WRITE_B = 3'd4, DONE = 3'd5;
-    reg [2:0] state = IDLE;
-    reg [COEFF_W-1:0] a_new, b_new;
-    assign done = (state == DONE);
+    assign ext_rdata = fa_q;
     
     wire we_en = (state == WRITE_A) || (state == WRITE_B);
     wire [ADDR_W-1:0] w_addr = (state == WRITE_B) ? addr_b : addr_a;
     wire [COEFF_W-1:0] w_data = (state == WRITE_B)? b_new : a_new;
     
+    wire we_m = busy? we_en : ext_we;
+    wire [ADDR_W-1:0] waddr_m = busy? w_addr:ext_addr;
+    wire [COEFF_W-1:0] wdata_m = busy? w_data: ext_wdata;
+    
     wire [COEFF_W-1:0] bf_a, bf_b;
     butterfly mul(.a(fa_q), .b(fb_q), .zeta(zeta_q), .a_out(bf_a), .b_out(bf_b));
     
     always @(posedge clk) begin
-        if (we_en) begin
-            f[w_addr] <= w_data;
+        if (we_m) begin
+            f[waddr_m] <= wdata_m;
         end
     end
     
