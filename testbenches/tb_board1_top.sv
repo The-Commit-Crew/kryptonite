@@ -20,7 +20,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
     wire b_rx = cut_ab ? 1'b1 : JA[0];
     assign JA[1] = b_tx;
 
-    My_Top_Module #(.SIM_MULTIPLIER(SIM_MULTIPLIER), .FIXED_NOISE(FIXED_NOISE), .BAUD_INC(16'd16384),
+    My_Top_Module #(.SKIP_MENU(1), .SIM_MULTIPLIER(SIM_MULTIPLIER), .FIXED_NOISE(FIXED_NOISE), .BAUD_INC(16'd16384),
                     .ACK_TIMEOUT(40000), .BYTE_TMO(2000), .MAX_RETRY(1)) dut (
         .clk(clk), .sw(sw), .btnC(1'b0), .btnU(1'b0), .btnL(1'b0), .btnR(1'b0), .btnD(1'b0),
         .led(led), .JA(JA), .JC(JC), .PS2Clk(PS2Clk), .PS2Data(PS2Data)
@@ -114,8 +114,8 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
     task automatic compose(input string digits);
         if (dut.state == 3) begin
             press(3);
-            press(4);
-            press(4);
+            press(4);                       // MSG -> DRAW (sender) or MSG -> RX
+            if (dut.state != 0) press(4);   // RX -> DRAW
         end
         for (int i = 0; i < digits.len(); i++) begin
             press(0);

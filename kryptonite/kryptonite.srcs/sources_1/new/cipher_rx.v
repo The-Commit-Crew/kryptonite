@@ -56,7 +56,7 @@ module cipher_rx (
     localparam R_IDLE = 2'd0, R_DAT = 2'd1, R_FIN = 2'd2;
     reg [1:0] st;
     reg [3:0] frag;        // fragment being read
-    reg [3:0] expect;      // next fragment we will accept
+    reg [3:0] next_frag;      // next fragment we will accept
     reg       assembling;
     reg [7:0] lo;          // low byte of the current coefficient
 
@@ -67,7 +67,7 @@ module cipher_rx (
         we <= 1'b0; new_ct <= 1'b0;
         if (rst) begin
             st <= R_IDLE; lk_ra <= 7'd0; got_mask <= 12'd0; ready <= 1'b0;
-            frag <= 4'd0; expect <= 4'd0; assembling <= 1'b0; lo <= 8'd0; head <= 72'd0;
+            frag <= 4'd0; next_frag <= 4'd0; assembling <= 1'b0; lo <= 8'd0; head <= 72'd0;
             wa <= 10'd0; wd <= 12'd0;
         end else begin
             case (st)
@@ -75,7 +75,7 @@ module cipher_rx (
                     if (t_off == 8'd0) begin                 // start / restart
                         got_mask <= 12'd0; ready <= 1'b0; assembling <= 1'b1;
                         frag <= 4'd0; lk_ra <= 7'd0; st <= R_DAT;
-                    end else if (assembling && t_off[3:0] == expect) begin
+                    end else if (assembling && t_off[3:0] == next_frag) begin
                         frag <= t_off[3:0]; lk_ra <= 7'd0; st <= R_DAT;
                     end else begin
                         assembling <= 1'b0;                 // out of order: drop it
@@ -94,7 +94,7 @@ module cipher_rx (
                 end
                 R_FIN: begin
                     got_mask[frag] <= 1'b1;
-                    expect <= frag + 4'd1;
+                    next_frag <= frag + 4'd1;
                     if (frag == 4'd11) begin
                         ready <= 1'b1; new_ct <= 1'b1; assembling <= 1'b0;
                     end

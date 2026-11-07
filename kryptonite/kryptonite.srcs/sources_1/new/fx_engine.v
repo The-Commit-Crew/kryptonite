@@ -34,6 +34,8 @@
 //  MSG /   fireworks on delivery        gravity + bouncing particles
 //  COMPOSE
 //  MSG / COMPOSE / RX: small spinner while the link is busy
+//  Rows 54..63 (toolbar / hint line) are never drawn on. Unknown screens
+//  (e.g. a splash or status screen, state 6 or 7) get no effects except the slide-in.
 //
 // Screens follow ui_screen: 0 DRAW 1 WAIT 2 RESULT 3 MSG 4 RX 5 COMPOSE.
 // Controls (wired in My_Top_Module): effects off = sw[3], style = sw[5],
@@ -475,5 +477,7 @@ module fx_engine #(
             default: ;
             endcase
         end
+        // rows 54..63 belong to the UI (toolbar / hint line): effects never draw there
+        if (py >= 6'd54) pdata = base;
     end
 endmodule
