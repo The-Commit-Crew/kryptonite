@@ -66,11 +66,12 @@ module My_Top_Module #(
 
     //---------------------------------------------------------- buttons
     wire p_submit, p_confirm, p_retry, p_clear, p_next;
-    debounce d_u (.clk(clk), .btn(btnU), .level(), .pulse(p_submit));
-    debounce d_c (.clk(clk), .btn(btnC), .level(), .pulse(p_confirm));
-    debounce d_l (.clk(clk), .btn(btnL), .level(), .pulse(p_retry));
-    debounce d_d (.clk(clk), .btn(btnD), .level(), .pulse(p_clear));
-    debounce d_r (.clk(clk), .btn(btnR), .level(), .pulse(p_next));
+    wire btnU_level, btnC_level, btnL_level, btnR_level, btnD_level;
+    debounce d_u (.clk(clk), .btn(btnU), .level(btnU_level), .pulse(p_submit));
+    debounce d_c (.clk(clk), .btn(btnC), .level(btnC_level), .pulse(p_confirm));
+    debounce d_l (.clk(clk), .btn(btnL), .level(btnL_level), .pulse(p_retry));
+    debounce d_d (.clk(clk), .btn(btnD), .level(btnD_level), .pulse(p_clear));
+    debounce d_r (.clk(clk), .btn(btnR), .level(btnR_level), .pulse(p_next));
 
     //---------------------------------------------------------- mouse (held in reset on the keyboard board)
     wire [11:0] xpos, ypos;
@@ -163,11 +164,23 @@ module My_Top_Module #(
     wire [3:0] pred_i       = dbg_en ? dbg_digit  : prediction;
     wire       empty_i      = dbg_en ? 1'b0       : (grid_valid & grid_empty);
     wire       busy_i       = dbg_en ? 1'b0       : v_busy;
+    wire click_submit, click_confirm, click_retry, click_clear, click_next;
+    wire [6:0] ui_cur_x;
+    wire [5:0] ui_cur_y;
+    wire ui_left, ui_right, paint_ok, erase_ok;
+    wire toolbar_valid;
+    wire [15:0] toolbar_pdata;
+    wire debug_buttons = sw[12] & ~role_kb;
+    wire p_submit_ui  = (p_submit  & ~debug_buttons) | click_submit;
+    wire p_confirm_ui = (p_confirm & ~debug_buttons) | click_confirm;
+    wire p_retry_ui   = (p_retry   & ~debug_buttons) | click_retry;
+    wire p_clear_ui   = (p_clear   & ~debug_buttons) | click_clear;
+    wire p_next_ui    = (p_next    & ~debug_buttons) | click_next;
 
     ui_ctrl #(.MAXLEN(MAXLEN)) u_ctrl (
         .clk(clk), .rst(rst),
-        .p_submit(p_submit), .p_confirm(p_confirm), .p_retry(p_retry),
-        .p_clear(p_clear), .p_next(p_next),
+        .p_submit(p_submit_ui), .p_confirm(p_confirm_ui), .p_retry(p_retry_ui),
+        .p_clear(p_clear_ui), .p_next(p_next_ui),
         .busy_i(busy_i), .pred_valid(pred_valid_i), .pred(pred_i), .empty_i(empty_i),
         .state(state), .digit(digit), .msg(msg), .msg_len(msg_len), .note(note),
         .submit_out(ctrl_submit), .clear_out(ctrl_clear),
@@ -202,11 +215,11 @@ module My_Top_Module #(
     wire                ja_tx;
 
     // SEND: keyboard board = Enter, mouse board = btnC on the MESSAGE screen
-    wire send_btn   = role_kb ? ed_send : (p_confirm & (state == 3'd3));
+    wire send_btn   = role_kb ? ed_send : (p_confirm_ui & (state == 3'd3));
     wire ct_mode    = sw[6];                       // ciphertext test mode (Khushi)
     wire send_req   = send_btn & ~ct_mode;
     wire ct_test_send = send_btn & ct_mode;
-    wire retry_req = p_retry & (role_kb || state == 3'd3);
+    wire retry_req = p_retry_ui & (role_kb || state == 3'd3);
     // btnD on the RX screen (mouse board) or anywhere on the keyboard board clears the received message
     wire rx_clr_all = ctrl_rxclr | (role_kb & p_clear);
 
@@ -321,9 +334,9 @@ module My_Top_Module #(
     assign oy = py;
     vision_ml u_vml (
         .clk(clk), .rst(rst),
-        .cursor_x(cur_x), .cursor_y(cur_y),
-        .paint(m_left & in_draw),
-        .erase(m_right & ~m_left & in_draw),
+        .cursor_x(ui_cur_x), .cursor_y(ui_cur_y),
+        .paint(ui_left & paint_ok & in_draw),
+        .erase(ui_right & ~ui_left & erase_ok & in_draw),
         .clear(ctrl_clear | (mid_pulse & in_draw)),
         .brush_sel({~sw[0], sw[0]}),
         .submit(ctrl_submit),
@@ -343,6 +356,18 @@ module My_Top_Module #(
     end
     pix_to_xy u_p2xy (.pix(pix), .x(px), .y(py));
 
+    ui_buttons u_buttons (
+        .clk(clk), .rst(rst), .role_kb(role_kb), .debug_en(sw[12]), .state(state),
+        .mouse_x(cur_x), .mouse_y(cur_y), .mouse_left(m_left), .mouse_right(m_right),
+        .btn_u_level(btnU_level), .btn_c_level(btnC_level), .btn_l_level(btnL_level),
+        .btn_r_level(btnR_level), .btn_d_level(btnD_level),
+        .px(px_w), .py(py), .cur_x(ui_cur_x), .cur_y(ui_cur_y),
+        .left(ui_left), .right(ui_right),
+        .click_submit(click_submit), .click_confirm(click_confirm),
+        .click_retry(click_retry), .click_clear(click_clear), .click_next(click_next),
+        .paint_ok(paint_ok), .erase_ok(erase_ok),
+        .toolbar_valid(toolbar_valid), .toolbar_pdata(toolbar_pdata));
+
     //---------------------------------------------------------- the renderer
     wire [2:0] scr_state = role_kb ? ((kb_view == 2'd0) ? 3'd5 : 3'd4) : state;
     wire       rx_hex    = role_kb ? (kb_view == 2'd2) : ~sw[2];   // mouse board: sw[2] up = text
@@ -354,9 +379,10 @@ module My_Top_Module #(
         .rx_log(show_log), .rx_n(show_n), .rx_hex(rx_hex),
         .role_kb(role_kb), .blink(blink), .note(note),
         .link_ok(link_ok), .link_fail(link_fail),
-        .cur_x(cur_x), .cur_y(cur_y),
+        .cur_x(ui_cur_x), .cur_y(ui_cur_y),
         .oink(oink), .has_ink(has_ink),
         .bxmin(bxmin), .bxmax(bxmax), .bymin(bymin), .bymax(bymax),
+        .toolbar_valid(toolbar_valid), .toolbar_pdata(toolbar_pdata),
         .pdata(ui_pdata));
 
     //---------------------------------------------------------- effects on top (Khushi)
@@ -365,7 +391,7 @@ module My_Top_Module #(
         .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
         .state(scr_state), .digit(digit),
         .rx_log(show_log), .rx_n(show_n), .rx_hex(rx_hex),
-        .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel({~sw[0], sw[0]}),
+        .grid(grid), .cur_x(ui_cur_x), .cur_y(ui_cur_y), .brush_sel({~sw[0], sw[0]}),
         .link_busy(link_busy | dec_busy), .link_ok(link_ok), .rx_new(show_new),
         .replay(p_submit & (scr_state == 3'd4)),
         .enc_go(send_btn));
