@@ -14,6 +14,8 @@ module tb_ui_screen;
     reg oink = 0, has_ink = 0;
     reg [6:0] bxmin = 10, bxmax = 20;
     reg [5:0] bymin = 10, bymax = 20;
+    reg toolbar_valid = 0;
+    reg [15:0] toolbar_pdata = 0;
     wire [15:0] pdata;
     integer errors = 0;
     integer n, n7, n1, na, nb;
@@ -28,6 +30,7 @@ module tb_ui_screen;
         .link_ok(link_ok), .link_fail(link_fail),
         .cur_x(cur_x), .cur_y(cur_y), .oink(oink), .has_ink(has_ink),
         .bxmin(bxmin), .bxmax(bxmax), .bymin(bymin), .bymax(bymax),
+        .toolbar_valid(toolbar_valid), .toolbar_pdata(toolbar_pdata),
         .pdata(pdata));
 
     // count the pixels of one colour inside a rectangle
@@ -106,7 +109,7 @@ module tb_ui_screen;
         state = 1; note = 1;
         tally(24, 71, 25, 38, CYAN, n);   must_have("WAIT text", n);
         tally(0, 95, 0, 63, WHITE, n);    must_not("WAIT no white", n);
-        tally(0, 95, 0, 63, RED, n);      must_not("WAIT no cursor", n);
+        tally(0, 95, 0, 63, RED, n);      must_have("WAIT cursor", n);
         tally(0, 29, 0, 6, YELLOW, n);    must_not("WAIT no note", n);
         note = 0;
 

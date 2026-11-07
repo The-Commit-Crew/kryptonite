@@ -25,6 +25,8 @@ module ui_screen #(
     input  oink, has_ink,
     input  [6:0] bxmin, bxmax,
     input  [5:0] bymin, bymax,
+    input toolbar_valid,
+    input  [15:0] toolbar_pdata,
     output reg [15:0] pdata
 );
     localparam S_DRAW = 3'd0, S_WAIT = 3'd1, S_RESULT = 3'd2,
@@ -38,8 +40,9 @@ module ui_screen #(
     //---------------------------------------------------------- shapes on the DRAW screen
     wire signed [8:0] ddx = $signed({2'b00, px}) - $signed({2'b00, cur_x});
     wire signed [8:0] ddy = $signed({3'b000, py}) - $signed({3'b000, cur_y});
-    wire on_cursor = ((ddx == 0) && (ddy >= -1) && (ddy <= 1)) ||
-                     ((ddy == 0) && (ddx >= -1) && (ddx <= 1));
+    wire on_cursor = !role_kb && (state <= S_RX) &&
+                     (((ddx == 0) && (ddy >= -1) && (ddy <= 1)) ||
+                      ((ddy == 0) && (ddx >= -1) && (ddx <= 1)));
     wire on_box = has_ink &&
                   ( ((px == bxmin || px == bxmax) && py >= bymin && py <= bymax) ||
                     ((py == bymin || py == bymax) && px >= bxmin && px <= bxmax) );
@@ -182,5 +185,9 @@ module ui_screen #(
             end
             default: ;
         endcase
+        if (toolbar_valid)
+            pdata = toolbar_pdata;
+        if (on_cursor)
+            pdata = RED;
     end
 endmodule
