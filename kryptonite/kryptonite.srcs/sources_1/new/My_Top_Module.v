@@ -74,6 +74,18 @@ module My_Top_Module #(
     always @(posedge clk) rk <= {rk[0], sw[13]};
     wire role_kb = rk[1];                  // 1 = keyboard board
 
+    reg [1:0] sw4_sync = 2'b00;
+    reg [1:0] sw6_sync = 2'b00;
+    always @(posedge clk) begin
+        sw4_sync <= {sw4_sync[0], sw[4]};
+        sw6_sync <= {sw6_sync[0], sw[6]};
+    end
+    wire sw4_i = sw4_sync[1];
+    wire sw6_i = sw6_sync[1];
+    reg role_kb_q = 1'b0;
+    always @(posedge clk) role_kb_q <= role_kb;
+    wire role_changed = role_kb ^ role_kb_q;
+
     // role comes from the start-up menu (ui_menu, at the end of this file)
     wire menu_active;                      // splash or a menu is on screen
     wire mode_listen, mode_self;           // receiver: listen / self test
@@ -199,7 +211,7 @@ module My_Top_Module #(
     wire p_next_ui    = ((p_next    & ~debug_buttons) | click_next) & ~menu_active;
 
     ui_ctrl #(.MAXLEN(MAXLEN)) u_ctrl (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst | role_changed),
         .p_submit(p_submit_ui), .p_confirm(p_confirm_ui), .p_retry(p_retry_ui),
         .p_clear(p_clear_ui), .p_next(p_next_ctrl),
         .busy_i(busy_i), .pred_valid(pred_valid_i), .pred(pred_i), .empty_i(empty_i),
@@ -244,7 +256,7 @@ module My_Top_Module #(
     wire send_btn   = ~role_rx & ~menu_active &
                       (role_kb ? (ed_send & ~kb_on_rx & ~tx_ct_view)     // Enter shows plaintext first
                                : (p_confirm_ui & (state == 3'd3)));
-    wire ct_mode    = sw[6];                       // ciphertext test mode (Khushi)
+    wire ct_mode    = sw6_i;                       // ciphertext test mode (Khushi)
     wire send_req   = send_btn & ~ct_mode;
     wire ct_test_send = send_btn & ct_mode;
     wire retry_req = ~role_rx & p_retry_ui & (role_kb || state == 3'd3);
@@ -267,7 +279,7 @@ module My_Top_Module #(
     top_fsm #(.MAXLEN(MAXLEN), .ENCRYPT_SEND(ENCRYPT_SEND), .FIXED_NOISE(FIXED_NOISE),
               .KEY_DIR(KEY_DIR), .NOISE_DIR(NOISE_DIR), .ACK_TIMEOUT(ACK_TIMEOUT),
               .BYTE_TMO(BYTE_TMO), .MAX_RETRY(MAX_RETRY), .BAUD_INC(BAUD_INC)) u_fsm (
-        .clk(clk), .rst(rst), .loopback(sw[4] | mode_self),   // self test: talk to itself
+        .clk(clk), .rst(rst), .loopback(sw4_i | mode_self),   // self test: talk to itself
         .rx_pin(JA[1]), .tx_pin(ja_tx),
         .send_req(send_req), .msg_in(out_msg), .msg_len_in(out_len),
         .rx_clear(rx_clr_all),
