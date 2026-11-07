@@ -115,7 +115,8 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
         if (dut.state == 3) begin
             press(3);
             press(4);
-            press(4);
+            if (dut.state == 3)  // The first press may close the ciphertext view.
+                press(4);
         end
         for (int i = 0; i < digits.len(); i++) begin
             press(0);
@@ -241,12 +242,11 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
         repeat (5) @(negedge clk);
         sw[15] = 0;
         repeat (5) @(negedge clk);
-        expected_text = "Ee2026A";
+        expected_text = " Ee  2026A";
         type_message(expected_text);
-        keypress(" ");
         keypress("!");
         if (dut.ed_len != expected_text.len())
-            $fatal(1, "Keyboard editor accepted space or punctuation");
+            $fatal(1, "Keyboard editor accepted punctuation");
         packets = 0;
         keypress(8'h0D);
         type_message("9876");
@@ -254,7 +254,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
         expect_success();
         if (multiplies != 30)
             $fatal(1, "A keyboard Send was accepted while busy");
-        $display("PASS: keyboard Enter encrypted mixed-case letters and digits and preserved the busy snapshot");
+        $display("PASS: keyboard Enter encrypted letters, digits and spaces and preserved the busy snapshot");
 
         type_message("0123456789012345");
         expected_text = "0123456789012345";

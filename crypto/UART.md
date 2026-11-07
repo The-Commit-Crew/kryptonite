@@ -41,8 +41,9 @@ ciphertext restarts at packet type `0x10` and source coefficient zero.
 
 `My_Top_Module` enables the encrypted sender through `top_fsm.ENCRYPT_SEND`.
 Centre on the mouse MESSAGE screen snapshots and encrypts the current digits.
-Enter on the keyboard board snapshots the editor's ASCII bytes. Both paths
-preserve the first character in byte 0 and pad the 32-byte plaintext with spaces.
+Enter on the keyboard board snapshots the editor's ASCII letters, digits and
+spaces. Both paths preserve the first character in byte 0 and pad the 32-byte
+plaintext with spaces. The receiver trims trailing spaces as padding.
 The busy LED covers encryption and transmission. OK appears after all packets
 are acknowledged. After FAIL, Left retries the retained ciphertext, and Centre
 (mouse) or Enter (keyboard) encrypts a new snapshot. Edits and extra Send presses during an active operation
@@ -96,7 +97,7 @@ and writes logs under the ignored `.crypto.sim` directory. It checks ten
 polynomial products against the schoolbook reference (including negacyclic
 wraparound, dense/random inputs, busy protection and reset recovery), fixed and
 live encryption, the existing NTT decryption regression, and Board 1 UI/UART
-retries with the hardware multiplier. Keyboard tests cover letters and digits.
+retries with the hardware multiplier. Keyboard tests cover letters, digits and spaces.
 Python also compares live-noise ciphertext with the reference and decrypts it
 using the existing local `crypto/keys/board2` key set. No keys are regenerated.
 

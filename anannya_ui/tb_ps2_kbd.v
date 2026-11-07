@@ -108,18 +108,19 @@ module tb_ps2_kbd;
         rst = 0;
         wait_clks(50);
 
-        // ---- letters and digits accepted, punctuation and space ignored ----
+        // ---- letters, digits and space accepted, punctuation ignored ----
         tap(8'h1C); settle;                                   expect_len(1, "a");        expect_char(0, "a", "a");
         make(8'h12); tap(8'h32); brk(8'h12); settle;           expect_len(2, "Shift+B");  expect_char(1, "B", "Shift+B");
         tap(8'h1A); settle;                                   expect_len(3, "z");        expect_char(2, "z", "z");
         tap(8'h76); settle;                                   expect_len(0, "Esc clears letters");
         tap(8'h16); settle;                                   expect_len(1, "1");        expect_char(0, "1", "1");
         make(8'h12); tap(8'h16); brk(8'h12); settle;          expect_len(1, "Shift+1 (!) ignored");
-        tap(8'h29); settle;                                   expect_len(1, "space ignored");
-        tap(8'h1E); settle;                                   expect_len(2, "2");        expect_char(1, "2", "2");
+        tap(8'h29); settle;                                   expect_len(2, "space");    expect_char(1, " ", "space");
+        tap(8'h1E); settle;                                   expect_len(3, "2");        expect_char(2, "2", "2");
 
         // ---- Backspace, right Shift, ignored keys ----
-        tap(8'h66); settle;                                   expect_len(1, "Backspace");
+        tap(8'h66); settle;                                   expect_len(2, "Backspace");
+        tap(8'h66); settle;                                   expect_len(1, "Backspace deletes space");
         make(8'h59); tap(8'h4C); brk(8'h59); settle;          expect_len(1, "RShift+; ignored");
         tap(8'h4C); settle;                                   expect_len(1, "; alone ignored");
         ps2_byte(8'hE0, 1'b1); ps2_byte(8'h75, 1'b1);                                             // extended key (arrow)

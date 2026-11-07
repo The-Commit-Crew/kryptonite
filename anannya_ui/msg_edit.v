@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////
 // msg_edit.v (Anannya) - typing buffer, one ASCII byte per character
-//  0-9, A-Z, a-z -> append (ignored when full)
+//  0-9, A-Z, a-z, space -> append (ignored when full)
 //  Backspace -> delete last                  Esc -> clear all
 //  Enter -> send pulse (if not empty)
 //  The text stays after Enter. Esc clears it.
@@ -24,7 +24,7 @@ module msg_edit #(
         end else if (key_valid) begin
             if ((key >= "0" && key <= "9") ||
                 (key >= "A" && key <= "Z") ||
-                (key >= "a" && key <= "z")) begin
+                (key >= "a" && key <= "z") || key == " ") begin
                 if (len < MAXLEN) begin
                     msg[len*8 +: 8] <= key;
                     len <= len + 5'd1;
