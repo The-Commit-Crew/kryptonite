@@ -21,7 +21,9 @@
 //     Received ciphertext is rebuilt, checked and decrypted in the background.
 //   Start-up menu (Khushi, ui_menu): reset shows the KRYPTONITE splash; btnR opens
 //     SELECT MODE (btnU/btnD move, btnC picks). RECEIVER then offers LISTEN or
-//     SELF TEST (btnL goes back). Reset (sw15) returns to the splash.
+//     SELF TEST (btnL goes back). Hold btnL for 1 s (or reset) to return to the splash.
+//   Keyboard board: Enter sends; after a send, Enter shows the plaintext again;
+//     on the RX screen (listen / self test) Enter decrypts.
 //   Sender / receiver behaviour:
 //     Sender:   after a send (hex rain, fireworks) the message rows show the real
 //               ciphertext; btnR shows the original digits again.
@@ -235,7 +237,13 @@ module My_Top_Module #(
     wire                ja_tx;
 
     // SEND: keyboard board = Enter, mouse board = btnC on the MESSAGE screen
-    wire send_btn   = ~role_rx & ~menu_active & (role_kb ? ed_send : (p_confirm_ui & (state == 3'd3)));
+    reg  tx_ct_view = 1'b0;                // sender is showing its ciphertext (views below)
+    // keyboard Enter, whatever is in the typing buffer
+    wire kb_enter   = role_kb & kb_key_v & (kb_key == 8'h0D) & ~menu_active;
+    wire kb_on_rx   = role_kb & (role_rx | (kb_view != 2'd0));
+    wire send_btn   = ~role_rx & ~menu_active &
+                      (role_kb ? (ed_send & ~kb_on_rx & ~tx_ct_view)     // Enter shows plaintext first
+                               : (p_confirm_ui & (state == 3'd3)));
     wire ct_mode    = sw[6];                       // ciphertext test mode (Khushi)
     wire send_req   = send_btn & ~ct_mode;
     wire ct_test_send = send_btn & ct_mode;
@@ -313,9 +321,10 @@ module My_Top_Module #(
     // SENDER: after a delivered send the message rows show the real ciphertext
     // (captured from fragment 0 as it was sent); btnR goes back to the digits.
     wire on_send_scr = role_kb ? (kb_view == 2'd0) : (state == 3'd3);
-    reg  tx_ct_view = 1'b0, ok_q2 = 1'b0;
+    reg  ok_q2 = 1'b0;
     reg  [4:0] len_q = 5'd0;
-    wire tx_flip = ~role_rx & tx_ct_view & on_send_scr & p_next_ui;   // btnR: show the digits
+    wire tx_flip = ~role_rx & tx_ct_view & on_send_scr &
+                   (p_next_ui | kb_enter);                         // btnR / Enter: show the plaintext
     always @(posedge clk) begin
         ok_q2 <= link_ok; len_q <= out_len;
         if (rst || role_rx || send_btn || out_len != len_q || tx_flip) tx_ct_view <= 1'b0;
@@ -328,7 +337,8 @@ module My_Top_Module #(
     // on the RX screen in listen or self-test mode
     wire on_rx_scr = role_rx | (role_kb ? (kb_view != 2'd0) : (state == 3'd4));
     wire rx_ui   = on_rx_scr & (mode_listen | mode_self);
-    wire dec_go  = rx_ui & rx_ct_view & dec_show & p_confirm_ui;   // btnC / DECRY: decrypt
+    wire dec_go  = rx_ui & rx_ct_view & dec_show &
+                   (p_confirm_ui | kb_enter);                      // btnC / DECRY / Enter: decrypt
     wire rx_flip = mode_listen & dec_show & p_next_ui;             // btnR / FLIP: cipher <-> plain
     always @(posedge clk) begin
         if (rst || rx_clr_all || rx_new || dec_go) rx_ct_view <= 1'b0;
@@ -468,8 +478,18 @@ module My_Top_Module #(
         .cipher_hex(cipher_hex), .show_cipher(show_cipher), .dec_go(dec_go));
 
     //---------------------------------------------------------- start-up menu (Khushi)
+    // hold btnL for 1 s: back to the KRYPTONITE splash and the mode menu
+    reg [26:0] home_cnt = 27'd0;
+    reg        go_home  = 1'b0;
+    always @(posedge clk) begin
+        go_home <= 1'b0;
+        if (!btnL_level || menu_active || debug_buttons) home_cnt <= 27'd0;   // sw12 uses btnL as a cursor key
+        else if (home_cnt == 27'd99_999_999) begin home_cnt <= 27'd0; go_home <= 1'b1; end
+        else home_cnt <= home_cnt + 27'd1;
+    end
+
     ui_menu #(.SKIP(SKIP_MENU)) u_menu (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .go_home(go_home),
         .p_up(p_submit), .p_down(p_clear), .p_left(p_retry),
         .p_confirm(p_confirm), .p_next(p_next),
         .px(px), .py(py), .active(menu_active), .pdata(menu_pdata),

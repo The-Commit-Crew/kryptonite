@@ -70,7 +70,7 @@ module ui_buttons #(
         valid0 = 1'b0; valid1 = 1'b0; valid2 = 1'b0;
         if (has_toolbar) begin
             case (state)
-                S_DRAW: begin label0 = "SEND "; label1 = "CLR  "; label2 = "MSG  "; valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1; end
+                S_DRAW: begin label0 = "CHECK"; label1 = "CLR  "; label2 = "MSG  "; valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1; end
                 S_WAIT: begin label0 = "STOP "; valid0 = 1'b1; end
                 S_RESULT: begin label0 = "OK   "; label1 = "RETRY"; valid0 = 1'b1; valid1 = 1'b1; end
                 S_MSG: begin
@@ -106,9 +106,23 @@ module ui_buttons #(
     assign erase_ok = right && (cur_y < 6'd54) && !start_on_button;
 
     wire text0, text1, text2;
-    text_line #(.N(5), .X0(3),  .Y0(56), .SCALE(1)) u_label0 (.px(px), .py(py), .chars(label0), .on(text0));
-    text_line #(.N(5), .X0(35), .Y0(56), .SCALE(1)) u_label1 (.px(px), .py(py), .chars(label1), .on(text1));
-    text_line #(.N(5), .X0(67), .Y0(56), .SCALE(1)) u_label2 (.px(px), .py(py), .chars(label2), .on(text2));
+    // labels are centred in their button (Khushi): a label of n characters is
+    // 6n-1 pixels wide, so in a 31-pixel button it starts 16 - 3n pixels in
+    function [2:0] label_len;                      // characters before the trailing spaces
+        input [39:0] t;
+        integer i;
+        begin
+            label_len = 3'd0;
+            for (i = 0; i < 5; i = i + 1)
+                if (t[(4-i)*8 +: 8] != 8'h20) label_len = i + 1;
+        end
+    endfunction
+    wire [6:0] off0 = 7'd16 - 7'd3 * label_len(label0);
+    wire [6:0] off1 = 7'd16 - 7'd3 * label_len(label1);
+    wire [6:0] off2 = 7'd16 - 7'd3 * label_len(label2);
+    text_line #(.N(5), .X0(0),  .Y0(56), .SCALE(1)) u_label0 (.px(px - off0), .py(py), .chars(label0), .on(text0));
+    text_line #(.N(5), .X0(33), .Y0(56), .SCALE(1)) u_label1 (.px(px - off1), .py(py), .chars(label1), .on(text1));
+    text_line #(.N(5), .X0(66), .Y0(56), .SCALE(1)) u_label2 (.px(px - off2), .py(py), .chars(label2), .on(text2));
 
     wire pixel_b0 = valid0 && (px <= 7'd30) && (py >= 6'd54) && (py <= 6'd63);
     wire pixel_b1 = valid1 && (px >= 7'd33) && (px <= 7'd63) && (py >= 6'd54) && (py <= 6'd63);

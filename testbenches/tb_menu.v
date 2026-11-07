@@ -10,11 +10,11 @@
 module tb_menu;
   reg clk = 0; always #5 clk = ~clk;
   reg rst = 1;
-  reg u = 0, d = 0, l = 0, c = 0, r = 0;
+  reg u = 0, d = 0, l = 0, c = 0, r = 0, home = 0;
   reg [6:0] px = 0; reg [5:0] py = 0;
   wire active, listen, selft; wire [15:0] mp;
   ui_menu #(.FRAME_DIV(2000)) m (.clk(clk), .rst(rst), .p_up(u), .p_down(d), .p_left(l),
-     .p_confirm(c), .p_next(r), .px(px), .py(py), .active(active), .pdata(mp),
+     .p_confirm(c), .p_next(r), .go_home(home), .px(px), .py(py), .active(active), .pdata(mp),
      .mode_listen(listen), .mode_self(selft));
 
   // toolbar + screen
@@ -73,6 +73,10 @@ module tb_menu;
     rst = 1; repeat (3) @(posedge clk); rst = 0;
     `PRESS(r) `PRESS(u) `PRESS(r) `PRESS(r)
     check("LISTEN picked", !active && listen && !selft);
+    `PRESS(home)
+    check("go_home returns to the splash", active && m.ms == 2'd0 && !listen && !selft);
+    `PRESS(r) `PRESS(c)
+    check("then SENDER can be picked again", !active && !listen && !selft);
 
     // toolbar
     use_menu = 0;

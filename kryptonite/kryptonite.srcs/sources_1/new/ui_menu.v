@@ -6,7 +6,8 @@
 //                    scan line, bar graph, changing hex). btnR -> MODE
 //            MODE    SENDER / RECEIVER.            btnU/btnD move, btnC or btnR pick
 //            RXOPT   LISTEN / SELF TEST.           btnL goes back to MODE
-//   then the menu is gone (active = 0) until the next reset, and the board runs
+//   then the menu is gone (active = 0) until the next reset or go_home (hold
+//   btnL for 1 s), and the board runs
 //   as:  sender     (draw/type, encrypt, send)
 //        listen     (receiver: stays on RX, shows ciphertext, decrypt on btnC)
 //        self test  (one board: encrypt your own digits, then decrypt them on RX)
@@ -24,6 +25,7 @@ module ui_menu #(
     input  wire        clk,
     input  wire        rst,
     input  wire        p_up, p_down, p_left, p_confirm, p_next,   // button pulses
+    input  wire        go_home,            // pulse: back to the splash (btnL held 1 s)
     input  wire [6:0]  px,
     input  wire [5:0]  py,
     output wire        active,             // 1 while a menu screen is shown
@@ -45,6 +47,8 @@ module ui_menu #(
     always @(posedge clk) begin
         if (rst) begin
             ms <= SKIP ? M_DONE : M_SPLASH; sel <= 1'b0; mode_listen <= 1'b0; mode_self <= 1'b0;
+        end else if (go_home && ms == M_DONE) begin
+            ms <= M_SPLASH; sel <= 1'b0; mode_listen <= 1'b0; mode_self <= 1'b0;
         end else case (ms)
             M_SPLASH: if (p_next || p_confirm) begin ms <= M_MODE; sel <= 1'b0; end
             M_MODE: begin
