@@ -185,8 +185,11 @@ module ui_screen #(
             end
             default: ;
         endcase
-        if (toolbar_valid)
-            pdata = toolbar_pdata;
+        // mouse board: the toolbar owns rows 54..63, so the old green hint line under
+        // it is hidden, gaps between buttons included; red warnings (FULL) still
+        // show through the gaps (Khushi)
+        if (!role_kb && (state <= S_RX) && (py >= 6'd54))
+            pdata = toolbar_valid ? toolbar_pdata : ((pdata == RED) ? RED : BLACK);
         if (on_cursor)
             pdata = RED;
     end

@@ -12,6 +12,7 @@ module ui_buttons #(
     input wire [2:0] state,
     input wire       rx_role,      // Khushi: 1 = receiver board (RX: DECRY / FLIP / CLR)
     input wire       tx_ct_view,   // Khushi: sender is showing its ciphertext (MSG: PLAIN)
+    input wire       self_mode,    // Khushi: self test (MSG: RX, RX: DECRY / CLR / BACK)
     input wire [6:0] mouse_x,
     input wire [5:0] mouse_y,
     input wire       mouse_left,
@@ -75,12 +76,15 @@ module ui_buttons #(
                 S_MSG: begin
                     label0 = "SEND "; label1 = "CLR  ";
                     // sender board: third button shows the digits again, or goes back to DRAW
-                    label2 = tx_ct_view ? "PLAIN" : "DRAW ";
+                    label2 = tx_ct_view ? "PLAIN" : (self_mode ? "RX   " : "DRAW ");
                     valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1;
                 end
                 S_RX: begin
                     if (rx_role) begin       // receiver board
                         label0 = "DECRY"; label1 = "FLIP "; label2 = "CLR  ";
+                        valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1;
+                    end else if (self_mode) begin   // self test: decrypt your own message
+                        label0 = "DECRY"; label1 = "CLR  "; label2 = "BACK ";
                         valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1;
                     end else begin
                         label0 = "CLR  "; label1 = "BACK "; valid0 = 1'b1; valid1 = 1'b1;
@@ -117,16 +121,22 @@ module ui_buttons #(
     wire pixel_hover = hover_button && (hover_index == pixel_index);
     wire pixel_flash = (flash_count != 0) && (flash_button == {2'd0, pixel_index});
 
+    // green cyber style (Khushi): outlined buttons, green text; hover lights the
+    // fill and turns the text white; a click flashes the button bright green.
+    localparam [15:0] T_GRN = 16'h2FF1, T_DIM = 16'h0368, T_FILL = 16'h0225;
+    wire pixel_edge = pixel_button && (py == 6'd54 || py == 6'd63 ||
+                      px == 7'd0 || px == 7'd30 || px == 7'd33 || px == 7'd63 ||
+                      px == 7'd66 || px == 7'd95);
     always @* begin
         toolbar_valid = pixel_button;
-        if (pixel_text)
-            toolbar_pdata = WHITE;
-        else if (pixel_flash)
-            toolbar_pdata = YELLOW;
-        else if (pixel_hover)
-            toolbar_pdata = BLUE_HI;
+        if (pixel_flash)
+            toolbar_pdata = pixel_text ? BLACK : T_GRN;
+        else if (pixel_text)
+            toolbar_pdata = pixel_hover ? WHITE : T_GRN;
+        else if (pixel_edge)
+            toolbar_pdata = pixel_hover ? T_GRN : T_DIM;
         else
-            toolbar_pdata = pixel_button ? BLUE : BLACK;
+            toolbar_pdata = pixel_hover ? T_FILL : BLACK;
     end
 
     always @(posedge clk) begin
@@ -178,6 +188,10 @@ module ui_buttons #(
                                 if (hover_index == 2'd0) click_confirm <= 1'b1;
                                 else if (hover_index == 2'd1) click_next <= 1'b1;
                                 else click_clear <= 1'b1;
+                            end else if (self_mode) begin            // DECRY / CLR / BACK
+                                if (hover_index == 2'd0) click_confirm <= 1'b1;
+                                else if (hover_index == 2'd1) click_clear <= 1'b1;
+                                else click_next <= 1'b1;
                             end else begin
                                 if (hover_index == 2'd0) click_clear <= 1'b1;
                                 else click_next <= 1'b1;
