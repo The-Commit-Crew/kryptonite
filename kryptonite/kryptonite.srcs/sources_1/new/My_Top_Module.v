@@ -507,5 +507,10 @@ module My_Top_Module #(
     // [15:11] message length  [10] note  [9] left click  [8:5] digit  [4] busy  [3] has_ink  [2:0] state
     wire [15:0] led_ui = {out_len, (note != 2'd0), m_left, digit, (busy_i | link_busy), has_ink, state};
     wire [15:0] led_ct = {ct_rx_mask, ct_busy, ct_tx_ok, ct_pass, ct_fail | ct_tx_bad};
-    assign led = ct_mode ? led_ct : led_ui;
+    wire [15:0] led_cas;
+    wire        cas_active;
+    led_cascade u_led_cascade (
+        .clk(clk), .rst(rst), .trig_send(link_busy), .trig_recv(dec_go),
+        .role(role_rx), .led_cas(led_cas), .active(cas_active));
+    assign led = ct_mode ? led_ct : (cas_active ? led_cas : led_ui);
 endmodule
