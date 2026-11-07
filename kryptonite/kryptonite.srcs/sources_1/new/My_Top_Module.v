@@ -18,7 +18,13 @@
 //   Khushi's additions:
 //     sw[3] up = effects off, sw[5] = decrypt reveal style
 //     (0 ciphertext -> particles -> message, 1 scramble-then-lock). Send shows hex rain.
-//     Received ciphertext is rebuilt, checked and decrypted; RX shows the decrypted text.
+//     Received ciphertext is rebuilt, checked and decrypted in the background.
+//   Sender / receiver (Khushi): sw[7] down = SENDER, up = RECEIVER.
+//     Sender:   after a send (hex rain, fireworks) the message rows show the real
+//               ciphertext; btnR shows the original digits again.
+//     Receiver: stays on the RX screen. A new message shows its real ciphertext;
+//               btnC decrypts it (reveal + fireworks); btnR flips between
+//               ciphertext and plaintext; btnU replays; btnD clears.
 //     btnU on RX replays the reveal; btnU on MSG / COMPOSE corrupts the next packet
 //     (demo of the automatic re-send). 7-segment cycles the link counters
 //     S (sent) r (received) E (errors) n (re-sends) every 2 s.
@@ -60,6 +66,10 @@ module My_Top_Module #(
     always @(posedge clk) rk <= {rk[0], sw[13]};
     wire role_kb = rk[1];                  // 1 = keyboard board
 
+    reg [1:0] rr = 2'b00;                  // sw[12] through a 2-FF synchroniser
+    always @(posedge clk) rr <= {rr[0], sw[7]};
+    wire role_rx = rr[1];                  // sw[7]: 1 = receiver, 0 = sender
+
     reg [25:0] bcnt = 26'd0;
     always @(posedge clk) bcnt <= bcnt + 26'd1;
     wire blink = bcnt[25];                 // about 3 Hz
@@ -72,6 +82,8 @@ module My_Top_Module #(
     debounce d_l (.clk(clk), .btn(btnL), .level(btnL_level), .pulse(p_retry));
     debounce d_d (.clk(clk), .btn(btnD), .level(btnD_level), .pulse(p_clear));
     debounce d_r (.clk(clk), .btn(btnR), .level(btnR_level), .pulse(p_next));
+    wire p_next_ctrl;                      // btnR as ui_ctrl sees it (see the views below)
+    wire [95:0] tx_ct_head;                // first ciphertext bytes sent (from top_fsm)
 
     //---------------------------------------------------------- mouse (held in reset on the keyboard board)
     wire [11:0] xpos, ypos;
@@ -180,8 +192,9 @@ module My_Top_Module #(
     ui_ctrl #(.MAXLEN(MAXLEN)) u_ctrl (
         .clk(clk), .rst(rst),
         .p_submit(p_submit_ui), .p_confirm(p_confirm_ui), .p_retry(p_retry_ui),
-        .p_clear(p_clear_ui), .p_next(p_next_ui),
+        .p_clear(p_clear_ui), .p_next(p_next_ctrl),
         .busy_i(busy_i), .pred_valid(pred_valid_i), .pred(pred_i), .empty_i(empty_i),
+        .skip_rx(~role_rx),
         .state(state), .digit(digit), .msg(msg), .msg_len(msg_len), .note(note),
         .submit_out(ctrl_submit), .clear_out(ctrl_clear),
         .confirm_out(ctrl_confirm), .rx_clear_out(ctrl_rxclr));
@@ -215,16 +228,16 @@ module My_Top_Module #(
     wire                ja_tx;
 
     // SEND: keyboard board = Enter, mouse board = btnC on the MESSAGE screen
-    wire send_btn   = role_kb ? ed_send : (p_confirm_ui & (state == 3'd3));
+    wire send_btn   = ~role_rx & (role_kb ? ed_send : (p_confirm_ui & (state == 3'd3)));
     wire ct_mode    = sw[6];                       // ciphertext test mode (Khushi)
     wire send_req   = send_btn & ~ct_mode;
     wire ct_test_send = send_btn & ct_mode;
-    wire retry_req = p_retry_ui & (role_kb || state == 3'd3);
+    wire retry_req = ~role_rx & p_retry_ui & (role_kb || state == 3'd3);
     // btnD on the RX screen (mouse board) or anywhere on the keyboard board clears the received message
-    wire rx_clr_all = ctrl_rxclr | (role_kb & p_clear);
+    wire rx_clr_all = ctrl_rxclr | (role_kb & p_clear) | (role_rx & p_clear_ui);
 
     // btnU on the MSG / COMPOSE screen: corrupt the next packet (demo of the re-send)
-    wire        fault_req = p_submit & (role_kb ? (kb_view == 2'd0) : (state == 3'd3));
+    wire        fault_req = ~role_rx & p_submit_ui & (role_kb ? (kb_view == 2'd0) : (state == 3'd3));
     wire        rx_new;
     wire [11:0] c_sent, c_recv, c_err, c_retry;
     // ciphertext test sender / receiver <-> top_fsm (cipher_link is below)
@@ -253,7 +266,8 @@ module My_Top_Module #(
         .ct_busy(ct_busy), .ct_we(ct_we), .ct_wa(ct_wa), .ct_wd(ct_wd), .ct_len(ct_len),
         .ct_type(ct_type), .ct_send(ct_send),
         .lk_busy(lk_busy), .lk_done(lk_done), .lk_fail(lk_fail),
-        .ct_ra(ct_ra), .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen), .lk_rd(lk_rd));
+        .ct_ra(ct_ra), .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen), .lk_rd(lk_rd),
+        .tx_ct_head(tx_ct_head));
 
     //---------------------------------------------------------- ciphertext receive + decrypt (Khushi)
     // Board 2 side: rebuild the 12 x 128-byte ciphertext packets into 768 words,
@@ -262,12 +276,14 @@ module My_Top_Module #(
     wire        ct_tx_ok, ct_tx_bad, ct_ready, ct_new, ct_pass, ct_fail;
     wire [9:0]  ct_mism;
     wire        dec_busy, dec_new;
+    wire [71:0] ct_head;
+
     wire [MAXLEN*8-1:0] dec_log;
     wire [4:0]  dec_n;
     cipher_link u_ct (
         .clk(clk), .rst(rst), .test_send(ct_test_send), .clear(rx_clr_all),
         .tx_ok(ct_tx_ok), .tx_bad(ct_tx_bad),
-        .rx_mask(ct_rx_mask), .ct_ready(ct_ready), .ct_new(ct_new),
+        .rx_mask(ct_rx_mask), .ct_ready(ct_ready), .ct_new(ct_new), .ct_head(ct_head),
         .chk_pass(ct_pass), .chk_fail(ct_fail), .chk_mismatch(ct_mism),
         .dec_busy(dec_busy), .msg_new(dec_new), .msg_log(dec_log), .msg_n(dec_n),
         .ct_busy(ct_busy), .ct_we(ct_we), .ct_wa(ct_wa), .ct_wd(ct_wd), .ct_len(ct_len),
@@ -284,7 +300,45 @@ module My_Top_Module #(
     end
     wire [MAXLEN*8-1:0] show_log = dec_show ? dec_log : rx_log;
     wire [4:0]          show_n   = dec_show ? dec_n   : rx_n;
-    wire                show_new = rx_new | dec_new;    // starts the decrypt reveal
+    wire                show_new = rx_new | dec_new;
+
+    //---------------------------------------------------------- ciphertext / plaintext views (Khushi)
+    // SENDER: after a delivered send the message rows show the real ciphertext
+    // (captured from fragment 0 as it was sent); btnR goes back to the digits.
+    wire on_send_scr = role_kb ? (kb_view == 2'd0) : (state == 3'd3);
+    reg  tx_ct_view = 1'b0, ok_q2 = 1'b0;
+    reg  [4:0] len_q = 5'd0;
+    wire tx_flip = ~role_rx & tx_ct_view & on_send_scr & p_next_ui;   // btnR: show the digits
+    always @(posedge clk) begin
+        ok_q2 <= link_ok; len_q <= out_len;
+        if (rst || role_rx || send_btn || out_len != len_q || tx_flip) tx_ct_view <= 1'b0;
+        else if (link_ok && !ok_q2)                                   tx_ct_view <= 1'b1;
+    end
+    assign p_next_ctrl = p_next_ui & ~tx_flip;     // that btnR press doesn't change screen
+
+    // RECEIVER: a new ciphertext is shown as ciphertext until btnC decrypts it.
+    reg  rx_ct_view = 1'b0;
+    wire dec_go  = role_rx & rx_ct_view & dec_show & p_confirm_ui; // btnC / DECRY: decrypt
+    wire rx_flip = role_rx & dec_show & p_next_ui;                 // btnR / FLIP: cipher <-> plain
+    always @(posedge clk) begin
+        if (rst || rx_clr_all || rx_new || dec_go) rx_ct_view <= 1'b0;
+        else if (ct_new)                           rx_ct_view <= 1'b1;
+        else if (rx_flip)                          rx_ct_view <= ~rx_ct_view;
+    end
+
+    // 16 hex digits of real ciphertext: the first coefficients {w0, w1, ...}
+    wire [71:0] tx_words;
+    generate
+        for (gi = 0; gi < 6; gi = gi + 1) begin : g_txw
+            assign tx_words[(5-gi)*12 +: 12] = {tx_ct_head[(2*gi+1)*8 +: 4], tx_ct_head[(2*gi)*8 +: 8]};
+        end
+    endgenerate
+    wire [63:0] cipher_hex  = role_rx ? ct_head[71:8] : tx_words[71:8];
+    wire        show_cipher = role_rx ? (rx_ct_view & ct_ready) : tx_ct_view;
+
+    // the plaintext stays hidden (text and hex views) until it has been decrypted
+    wire [MAXLEN*8-1:0] view_log = rx_ct_view ? {MAXLEN*8{1'b0}} : show_log;
+    wire [4:0]          view_n   = rx_ct_view ? 5'd0 : show_n;
 
     //---------------------------------------------------------- 7-segment link stats (Khushi)
     // cycles S -> r -> E -> n every 2 seconds, no button needed
@@ -357,7 +411,8 @@ module My_Top_Module #(
     pix_to_xy u_p2xy (.pix(pix), .x(px), .y(py));
 
     ui_buttons u_buttons (
-        .clk(clk), .rst(rst), .role_kb(role_kb), .debug_en(sw[12]), .state(state),
+        .clk(clk), .rst(rst), .role_kb(role_kb), .debug_en(sw[12]),
+        .state(role_rx ? 3'd4 : state), .rx_role(role_rx), .tx_ct_view(tx_ct_view),
         .mouse_x(cur_x), .mouse_y(cur_y), .mouse_left(m_left), .mouse_right(m_right),
         .btn_u_level(btnU_level), .btn_c_level(btnC_level), .btn_l_level(btnL_level),
         .btn_r_level(btnR_level), .btn_d_level(btnD_level),
@@ -369,14 +424,15 @@ module My_Top_Module #(
         .toolbar_valid(toolbar_valid), .toolbar_pdata(toolbar_pdata));
 
     //---------------------------------------------------------- the renderer
-    wire [2:0] scr_state = role_kb ? ((kb_view == 2'd0) ? 3'd5 : 3'd4) : state;
+    wire [2:0] scr_state = role_rx ? 3'd4 :                       // receiver: always RX
+                           role_kb ? ((kb_view == 2'd0) ? 3'd5 : 3'd4) : state;
     wire       rx_hex    = role_kb ? (kb_view == 2'd2) : ~sw[2];   // mouse board: sw[2] up = text
 
     wire [15:0] ui_pdata, pdata;
     ui_screen #(.MAXLEN(MAXLEN)) u_screen (
         .px(px_w), .py(py), .state(scr_state), .digit(digit),
         .msg(out_msg), .msg_len(out_len),
-        .rx_log(show_log), .rx_n(show_n), .rx_hex(rx_hex),
+        .rx_log(view_log), .rx_n(view_n), .rx_hex(rx_hex),
         .role_kb(role_kb), .blink(blink), .note(note),
         .link_ok(link_ok), .link_fail(link_fail),
         .cur_x(ui_cur_x), .cur_y(ui_cur_y),
@@ -390,11 +446,12 @@ module My_Top_Module #(
         .clk(clk), .rst(rst), .en(~sw[3]), .style(sw[5]),
         .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
         .state(scr_state), .digit(digit),
-        .rx_log(show_log), .rx_n(show_n), .rx_hex(rx_hex),
+        .rx_log(view_log), .rx_n(view_n), .rx_hex(rx_hex),
         .grid(grid), .cur_x(ui_cur_x), .cur_y(ui_cur_y), .brush_sel({~sw[0], sw[0]}),
         .link_busy(link_busy | dec_busy), .link_ok(link_ok), .rx_new(show_new),
-        .replay(p_submit & (scr_state == 3'd4)),
-        .enc_go(send_btn));
+        .replay(p_submit_ui & (scr_state == 3'd4)),
+        .enc_go(send_btn),
+        .cipher_hex(cipher_hex), .show_cipher(show_cipher), .dec_go(dec_go));
 
     Oled_Display u_oled (
         .clk(clk6p25), .reset(rst),

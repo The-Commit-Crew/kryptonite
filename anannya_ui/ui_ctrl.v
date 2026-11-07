@@ -30,6 +30,7 @@ module ui_ctrl #(
     input pred_valid,                   // 1-clock pulse: prediction ready
     input [3:0] pred,
     input empty_i,                      // 1-clock pulse: canvas was empty
+    input skip_rx,                      // 1: MSG -> DRAW on next (sender board has no RX screen)
     output reg  [2:0] state = 3'd0,
     output reg  [3:0] digit = 4'd0,           // digit shown on the RESULT screen
     output reg  [MAXLEN*4-1:0] msg = 0,       // confirmed digits, digit 0 in [3:0]
@@ -104,7 +105,7 @@ module ui_ctrl #(
 
                 S_MSG: begin
                     if (p_next) begin
-                        state <= S_RX;
+                        state <= skip_rx ? S_DRAW : S_RX;
                     end else if (p_clear) begin
                         msg     <= 0;
                         msg_len <= 5'd0;

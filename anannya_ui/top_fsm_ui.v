@@ -57,7 +57,9 @@ module top_fsm #(
     output wire       lk_busy, lk_done, lk_fail,
     input  wire [6:0] ct_ra,
     output wire       lk_rxv,
-    output wire [7:0] lk_rtype, lk_rlen, lk_rd
+    output wire [7:0] lk_rtype, lk_rlen, lk_rd,
+    // first 12 bytes of the last ciphertext sent (fragment 0), for display (Khushi)
+    output reg  [95:0] tx_ct_head = 96'd0
 );
     localparam [7:0] T_DATA = 8'h10;
     localparam [4:0] MAXL   = MAXLEN;
@@ -98,6 +100,11 @@ module top_fsm #(
         .rx_type(l_rtype), .rx_valid(l_rxv),
         .fault_inject(fault_inject), .tick16_out(), .tx_seq(),
         .cnt_sent(cnt_sent), .cnt_recv(cnt_recv), .cnt_err(cnt_err), .cnt_retry(cnt_retry));
+
+    // snoop the TX buffer while ciphertext fragment 0 is being written
+    always @(posedge clk)
+        if (m_we && m_type == 8'h10 && m_len == 8'd128 && m_wa < 7'd12)
+            tx_ct_head[m_wa * 8 +: 8] <= m_wd;
 
     assign lk_busy = l_busy;
     assign lk_done = l_done & ct_busy;                 // only the external sender's results

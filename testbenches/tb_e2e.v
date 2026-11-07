@@ -35,6 +35,13 @@ module tb_e2e;
     wire [11:0] a_cs, a_cr, a_ce, a_cn;
     wire m_we, m_start, m_done; wire [7:0] m_wa, m_ra; wire [11:0] m_l, m_r, m_rd;
 
+    wire [95:0] a_head;                  // first 12 ciphertext bytes A sent
+    wire [71:0] a_words = {a_head[11:8],a_head[7:0], a_head[27:24],a_head[23:16],
+                           a_head[43:40],a_head[39:32], a_head[59:56],a_head[55:48],
+                           a_head[75:72],a_head[71:64], a_head[91:88],a_head[87:80]};
+    wire [71:0] b_head;                  // first 6 coefficients B rebuilt
+    reg  [71:0] prev_head = 0;
+
     top_fsm #(.MAXLEN(16), .ENCRYPT_SEND(1), .ACK_TIMEOUT(400000), .BYTE_TMO(20000),
               .BAUD_INC(16'd9664)) fa (
         .clk(clk), .rst(rst), .loopback(1'b0), .rx_pin(b_tx), .tx_pin(a_tx),
@@ -48,7 +55,7 @@ module tb_e2e;
         .ct_busy(1'b0), .ct_we(1'b0), .ct_wa(7'd0), .ct_wd(8'd0), .ct_len(8'd0),
         .ct_type(8'd0), .ct_send(1'b0),
         .lk_busy(), .lk_done(), .lk_fail(), .ct_ra(7'd0),
-        .lk_rxv(), .lk_rtype(), .lk_rlen(), .lk_rd());
+        .lk_rxv(), .lk_rtype(), .lk_rlen(), .lk_rd(), .tx_ct_head(a_head));
     shared_poly_multiplier mult (
         .clk(clk), .rst(rst), .wr_en(m_we), .wr_addr(m_wa), .left_data(m_l), .right_data(m_r),
         .start(m_start), .done(m_done), .rd_addr(m_ra), .rd_data(m_rd));
@@ -75,7 +82,7 @@ module tb_e2e;
         .lk_rxv(b_rxv), .lk_rtype(b_rt), .lk_rlen(b_rl), .lk_rd(b_rd));
     cipher_link cb (.clk(clk), .rst(rst), .test_send(1'b0), .clear(1'b0),
         .tx_ok(b_txok), .tx_bad(b_txbad),
-        .rx_mask(b_rm), .ct_ready(b_rdy), .ct_new(b_new),
+        .rx_mask(b_rm), .ct_ready(b_rdy), .ct_new(b_new), .ct_head(b_head),
         .chk_pass(b_pass), .chk_fail(b_fail), .chk_mismatch(b_mm),
         .dec_busy(b_dbusy), .msg_new(b_mnew), .msg_log(b_mlog), .msg_n(b_mn),
         .ct_busy(b_ctb), .ct_we(b_we), .ct_wa(b_wa), .ct_wd(b_wd), .ct_len(b_len8),
@@ -124,6 +131,10 @@ module tb_e2e;
             check("B: all 12 fragments rebuilt", b_rdy && b_rm == 12'hFFF);
             check("B: decrypted text matches", b_mlog == want);
             check("B: decrypted length matches", b_mn == n);
+            check("display: B's ciphertext == what A sent", b_head == a_words && b_head != 0);
+            check("display: ciphertext differs from last send", b_head != prev_head);
+            $display("       ciphertext shown on both boards: %h", b_head[71:8]);
+            prev_head = b_head;
             $display("       sent \"%0s\", B decrypted %0d chars", txt, b_mn);
         end
     endtask

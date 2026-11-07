@@ -10,6 +10,8 @@ module ui_buttons #(
     input wire       role_kb,
     input wire       debug_en,
     input wire [2:0] state,
+    input wire       rx_role,      // Khushi: 1 = receiver board (RX: DECRY / FLIP / CLR)
+    input wire       tx_ct_view,   // Khushi: sender is showing its ciphertext (MSG: PLAIN)
     input wire [6:0] mouse_x,
     input wire [5:0] mouse_y,
     input wire       mouse_left,
@@ -70,8 +72,20 @@ module ui_buttons #(
                 S_DRAW: begin label0 = "SEND "; label1 = "CLR  "; label2 = "MSG  "; valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1; end
                 S_WAIT: begin label0 = "STOP "; valid0 = 1'b1; end
                 S_RESULT: begin label0 = "OK   "; label1 = "RETRY"; valid0 = 1'b1; valid1 = 1'b1; end
-                S_MSG: begin label0 = "SEND "; label1 = "CLR  "; label2 = "RX   "; valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1; end
-                S_RX: begin label0 = "CLR  "; label1 = "BACK "; valid0 = 1'b1; valid1 = 1'b1; end
+                S_MSG: begin
+                    label0 = "SEND "; label1 = "CLR  ";
+                    // sender board: third button shows the digits again, or goes back to DRAW
+                    label2 = tx_ct_view ? "PLAIN" : "DRAW ";
+                    valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1;
+                end
+                S_RX: begin
+                    if (rx_role) begin       // receiver board
+                        label0 = "DECRY"; label1 = "FLIP "; label2 = "CLR  ";
+                        valid0 = 1'b1; valid1 = 1'b1; valid2 = 1'b1;
+                    end else begin
+                        label0 = "CLR  "; label1 = "BACK "; valid0 = 1'b1; valid1 = 1'b1;
+                    end
+                end
                 default: ;
             endcase
         end
@@ -160,8 +174,14 @@ module ui_buttons #(
                             else click_next <= 1'b1;
                         end
                         S_RX: begin
-                            if (hover_index == 2'd0) click_clear <= 1'b1;
-                            else click_next <= 1'b1;
+                            if (rx_role) begin                       // DECRY / FLIP / CLR
+                                if (hover_index == 2'd0) click_confirm <= 1'b1;
+                                else if (hover_index == 2'd1) click_next <= 1'b1;
+                                else click_clear <= 1'b1;
+                            end else begin
+                                if (hover_index == 2'd0) click_clear <= 1'b1;
+                                else click_next <= 1'b1;
+                            end
                         end
                         default: ;
                     endcase

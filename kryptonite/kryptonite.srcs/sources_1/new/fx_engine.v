@@ -20,16 +20,17 @@
 //  COMPOSE                              into falling hex for >= 1.5 s (and
 //                                       while the link is busy); fireworks
 //                                       wait until the rain has cleared
-//  RX      decrypt reveal, style 0:     a line of hex ciphertext appears,
-//  (text)  ciphertext -> particles      bursts into particles, and the
-//          -> plaintext                 particles fly together into the
-//                                       decrypted message (fx_particles)
+//  RX      decrypt reveal, style 0:     on dec_go (the receiver presses
+//  (text)  ciphertext -> particles      decrypt) the real ciphertext bursts
+//          -> plaintext                 into particles that fly together into
+//                                       the decrypted message, then fireworks
 //  RX      decrypt reveal, style 1:     each character flickers through
 //  (text)  scramble-then-lock           random hex, then locks left to right
 //  RX      sparkle dust                 random sparks whose density halves
 //                                       every 10 frames (exponential decay)
-//  RX      ciphertext rain              falling hex columns while nothing
-//                                       has been received yet
+//  MSG /   ciphertext view              when show_cipher = 1 the message rows
+//  COMPOSE                              show the real ciphertext (first 16
+//  / RX                                 hex digits, cipher_hex) in pale green
 //  MSG /   fireworks on delivery        gravity + bouncing particles
 //  COMPOSE
 //  MSG / COMPOSE / RX: small spinner while the link is busy
@@ -70,7 +71,10 @@ module fx_engine #(
     input  wire        link_ok,            // level: last send was delivered
     input  wire        rx_new,             // pulse: a new message arrived
     input  wire        replay,             // pulse: play the decrypt reveal again
-    input  wire        enc_go              // pulse: the user pressed send (encrypt)
+    input  wire        enc_go,             // pulse: the user pressed send (encrypt)
+    input  wire [63:0] cipher_hex,         // 16 hex digits of real ciphertext, digit 0 in [63:60]
+    input  wire        show_cipher,        // level: show cipher_hex in the message rows
+    input  wire        dec_go              // pulse: receiver pressed decrypt
 );
     localparam S_DRAW = 3'd0, S_WAIT = 3'd1, S_RESULT = 3'd2, S_MSG = 3'd3, S_RX = 3'd4,
                S_COMPOSE = 3'd5;
@@ -132,7 +136,8 @@ module fx_engine #(
     reg  [7:0] dec_t;                      // frames into the decrypt reveal
     reg        dec_run;
     reg        dec_style;
-    reg        fresh;                      // a message arrived that hasn't been revealed
+    reg        fresh;                      // decrypt pressed, reveal not started yet
+    reg        dec_fw;                     // fireworks when this reveal finishes
     reg        ok_q;
     reg        fw_go;
     reg        enc_run;                    // encrypt rain running
@@ -159,7 +164,7 @@ module fx_engine #(
         fw_go <= 1'b0;
         if (rst) begin
             prev_state <= S_DRAW; slide_n <= 6'd63; drop_n <= 6'd63;
-            dec_t <= 0; dec_run <= 1'b0; dec_style <= 1'b0; fresh <= 1'b0; ok_q <= 1'b0;
+            dec_t <= 0; dec_run <= 1'b0; dec_style <= 1'b0; fresh <= 1'b0; ok_q <= 1'b0; dec_fw <= 1'b0;
             enc_run <= 1'b0; enc_t <= 8'd0; fw_pend <= 1'b0; cseed <= 16'd0;
         end else begin
             prev_state <= state;
@@ -176,18 +181,22 @@ module fx_engine #(
                 if (drop_n  != 6'd63) drop_n  <= drop_n + 6'd1;
             end
 
-            // decrypt reveal: when a new message is waiting and we're looking at it
-            if (rx_new) fresh <= 1'b1;
+            // decrypt reveal: only when the receiver asks (decrypt) or replays
+            if (dec_go) fresh <= 1'b1;
             if (rx_hex && dec_run) dec_run <= 1'b0;        // switched to hex view
+            if (!en) fresh <= 1'b0;
             if (en && rx_text && !slide_on && dlen != 5'd0 && (fresh || replay)) begin
                 dec_run   <= 1'b1;
                 dec_t     <= 8'd0;
                 dec_style <= style;
+                dec_fw    <= 1'b1;
                 fresh     <= 1'b0;
                 cseed     <= fcount;
             end else if (dec_run && tick) begin
-                if (dec_t >= dec_end) dec_run <= 1'b0;
-                else                  dec_t <= dec_t + 8'd1;
+                if (dec_t >= dec_end) begin
+                    dec_run <= 1'b0;
+                    if (dec_fw) begin fw_go <= 1'b1; dec_fw <= 1'b0; end   // decrypted: celebrate
+                end else dec_t <= dec_t + 8'd1;
             end
 
             // encrypt rain: starts on send, runs at least 90 frames (1.5 s) and
@@ -230,14 +239,12 @@ module fx_engine #(
         end
     endgenerate
 
-    // fake ciphertext for phase A/B: random hex, fixed for the whole reveal
+    // the real ciphertext as two rows of 8 hex characters (16 hex digits)
     wire [63:0] cip_r1, cip_r2;
     generate
         for (k = 0; k < 8; k = k + 1) begin : g_cip
-            wire [15:0] c1 = mix(cseed ^ ((dec_t < 8'd12) ? {8'd0, dec_t[7:1]} : 16'd0), k);
-            wire [15:0] c2 = mix(cseed ^ ((dec_t < 8'd12) ? {8'd0, dec_t[7:1]} : 16'd0), k + 8);
-            assign cip_r1[(7-k)*8 +: 8] = (k < dlen)       ? h2a(c1[3:0]) : 8'h20;
-            assign cip_r2[(7-k)*8 +: 8] = ((k + 8) < dlen) ? h2a(c2[3:0]) : 8'h20;
+            assign cip_r1[(7-k)*8 +: 8] = h2a(cipher_hex[(15-k)*4 +: 4]);
+            assign cip_r2[(7-k)*8 +: 8] = h2a(cipher_hex[(7-k)*4 +: 4]);
         end
     endgenerate
 
@@ -279,8 +286,8 @@ module fx_engine #(
     endgenerate
     wire scr_on1, scr_on2;
     // the same two text lines show the scramble (style 1) or the ciphertext (style 0, phase A)
-    wire [63:0] tl_r1 = dec_style ? scr_r1 : cip_r1;
-    wire [63:0] tl_r2 = dec_style ? scr_r2 : cip_r2;
+    wire [63:0] tl_r1 = (dec_run && dec_style) ? scr_r1 : cip_r1;
+    wire [63:0] tl_r2 = (dec_run && dec_style) ? scr_r2 : cip_r2;
     text_line #(.N(8), .X0(0), .Y0(14), .SCALE(2)) u_sc1 (.px(px), .py(py), .chars(tl_r1), .on(scr_on1));
     text_line #(.N(8), .X0(0), .Y0(32), .SCALE(2)) u_sc2 (.px(px), .py(py), .chars(tl_r2), .on(scr_on2));
 
@@ -327,8 +334,13 @@ module fx_engine #(
                            (rdist < 9'sd10) ? 16'h07E0 :     // bright green
                            (rdist < 9'sd18) ? 16'h0400 :     // mid green
                                               16'h0200;      // faint tail
-    wire rain_on = (((state == S_RX) && (rx_n == 5'd0)) || (on_send_screen && enc_run)) &&
-                   (py >= 6'd9) && (py < 6'd51);
+    wire rain_on = on_send_screen && enc_run && (py >= 6'd9) && (py < 6'd51);   // only while sending
+
+    // ciphertext view: the message rows (and the COMPOSE cursor line under them)
+    wire ovl_rows = ((py >= 6'd14) && (py < 6'd30)) || ((py >= 6'd32) && (py < 6'd48));
+    wire ovl_on   = show_cipher && !dec_run && !enc_run &&
+                    (on_send_screen || ((state == S_RX) && !rx_hex));
+    localparam [15:0] PALEGREEN = 16'hAFF5;
 
     //================================================================ spinner
     // Minsky circle: x -= y/4, then y += x/4 (with the new x). Only shifts and
@@ -413,6 +425,8 @@ module fx_engine #(
     wire [15:0] base = (slide_on && off_screen) ? BLACK : ui_pdata;
     always @(*) begin
         pdata = base;
+        // the ciphertext view is information, not decoration: shown even with effects off
+        if (ovl_on && ovl_rows) pdata = (scr_on1 || scr_on2) ? PALEGREEN : BLACK;
         if (en) begin
             case (state)
             S_DRAW: begin
@@ -447,7 +461,7 @@ module fx_engine #(
                             pdata = !locked ? GREEN : (just_lock ? YELLOW : WHITE);
                         else pdata = BLACK;
                     end else if (ph_a && (scr_on1 || scr_on2))   // the ciphertext
-                        pdata = (dec_t < 8'd12) ? 16'h07E0 : 16'hAFF5;
+                        pdata = PALEGREEN;
                     else pdata = BLACK;                        // particles draw B and C
                 end
                 if (pdata == BLACK && spark) pdata = spark_rgb;

@@ -37,6 +37,7 @@ module cipher_rx (
     output reg  [11:0] got_mask,         // fragments of the current assembly
     output reg         ready,            // all 12 fragments are in
     output reg         new_ct,           // pulse: a complete ciphertext just arrived
+    output reg  [71:0] head,             // first 6 coefficients {w0,..,w5}, for display
 
     // read port
     input  wire [9:0]  rd_addr,
@@ -66,7 +67,7 @@ module cipher_rx (
         we <= 1'b0; new_ct <= 1'b0;
         if (rst) begin
             st <= R_IDLE; lk_ra <= 7'd0; got_mask <= 12'd0; ready <= 1'b0;
-            frag <= 4'd0; expect <= 4'd0; assembling <= 1'b0; lo <= 8'd0;
+            frag <= 4'd0; expect <= 4'd0; assembling <= 1'b0; lo <= 8'd0; head <= 72'd0;
             wa <= 10'd0; wd <= 12'd0;
         end else begin
             case (st)
@@ -85,6 +86,8 @@ module cipher_rx (
                     if (!lk_ra[0]) lo <= lk_rd;
                     else begin
                         we <= 1'b1; wa <= {frag, lk_ra[6:1]}; wd <= {lk_rd[3:0], lo};
+                        if (frag == 4'd0 && lk_ra[6:1] < 6'd6)          // keep w0..w5 to show
+                            head[(5 - lk_ra[3:1]) * 12 +: 12] <= {lk_rd[3:0], lo};
                     end
                     if (lk_ra == 7'd127) st <= R_FIN;
                     else lk_ra <= lk_ra + 7'd1;

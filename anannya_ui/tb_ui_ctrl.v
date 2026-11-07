@@ -37,7 +37,7 @@ module tb_ui_ctrl;
         .clk(clk), .rst(rst),
         .p_submit(p_submit), .p_confirm(p_confirm), .p_retry(p_retry),
         .p_clear(p_clear), .p_next(p_next),
-        .busy_i(busy_i), .pred_valid(pred_valid), .pred(pred), .empty_i(empty_i),
+        .busy_i(busy_i), .pred_valid(pred_valid), .pred(pred), .empty_i(empty_i), .skip_rx(1'b0),
         .state(state), .digit(digit), .msg(msg), .msg_len(msg_len), .note(note),
         .submit_out(submit_out), .clear_out(clear_out),
         .confirm_out(confirm_out), .rx_clear_out(rx_clear_out));

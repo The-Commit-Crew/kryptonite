@@ -27,6 +27,7 @@ module cipher_link (
     output wire [11:0] rx_mask,          // fragments received
     output wire        ct_ready,         // all 12 received
     output wire        ct_new,           // pulse: a complete ciphertext arrived
+    output wire [71:0] ct_head,          // its first 6 coefficients, for display
     output wire        chk_pass,         // received copy == test vector
     output wire        chk_fail,
     output wire [9:0]  chk_mismatch,
@@ -79,7 +80,7 @@ module cipher_link (
         .clk(clk), .rst(rst), .clear(clear),
         .lk_rxv(lk_rxv), .lk_rtype(lk_rtype), .lk_rlen(lk_rlen),
         .lk_ra(ct_ra), .lk_rd(lk_rd),
-        .got_mask(rx_mask), .ready(ct_ready), .new_ct(ct_new),
+        .got_mask(rx_mask), .ready(ct_ready), .new_ct(ct_new), .head(ct_head),
         .rd_addr(rd_addr), .rd_data(rx_data));
 
     // start decrypting as soon as the check has finished with the RAM

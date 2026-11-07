@@ -2,7 +2,8 @@
 //////////////////////////////////////////////////////////////////////////////
 // tb_fx.v  (Khushi) - renders the visual effects to image files
 //
-// Drives ui_screen + fx_engine through every effect and saves 24 frames as
+// Drives ui_screen + fx_engine through the sender and receiver flows (the
+// switching My_Top_Module does is copied by hand here) and saves 24 frames as
 // PPM images in a folder called frames/ (create it first, next to where the
 // simulator runs). Then run:  py testbenches/fx_frames.py <that folder>
 // to get contact_sheet.png with all frames side by side.
@@ -20,18 +21,21 @@ module tb_fx;
   reg [127:0] msg = 0, rx_log = 0; reg [4:0] msg_len = 0, rx_n = 0;
   reg [319:0] grid = 0; reg [6:0] cur_x = 40; reg [5:0] cur_y = 30; reg [1:0] bsel = 2;
   reg link_busy = 0, link_ok = 0, rx_new = 0, replay = 0, enc_go = 0;
+  reg [63:0] cipher_hex = 64'h0;  reg show_cipher = 0, dec_go = 0;
   reg oink = 0;
 
   ui_screen #(.MAXLEN(16)) ui (.px(px_w), .py(py), .state(state), .digit(digit),
      .msg(msg), .msg_len(msg_len), .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
      .role_kb(role_kb), .blink(1'b0), .note(2'd0),
      .link_ok(link_ok), .link_fail(1'b0), .cur_x(cur_x), .cur_y(cur_y),
-     .oink(oink), .has_ink(1'b0), .bxmin(7'd0), .bxmax(7'd0), .bymin(6'd0), .bymax(6'd0), .pdata(ui_pdata));
+     .oink(oink), .has_ink(1'b0), .bxmin(7'd0), .bxmax(7'd0), .bymin(6'd0), .bymax(6'd0),
+     .toolbar_valid(1'b0), .toolbar_pdata(16'd0), .pdata(ui_pdata));
   fx_engine #(.MAXLEN(16), .FRAME_DIV(40000)) fx (.clk(clk), .rst(rst), .en(en), .style(style),
      .px(px), .py(py), .px_w(px_w), .ui_pdata(ui_pdata), .pdata(pdata),
      .state(state), .digit(digit), .rx_log(rx_log), .rx_n(rx_n), .rx_hex(rx_hex),
      .grid(grid), .cur_x(cur_x), .cur_y(cur_y), .brush_sel(bsel),
-     .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new), .replay(replay), .enc_go(enc_go));
+     .link_busy(link_busy), .link_ok(link_ok), .rx_new(rx_new), .replay(replay), .enc_go(enc_go),
+     .cipher_hex(cipher_hex), .show_cipher(show_cipher), .dec_go(dec_go));
 
   integer f, i, x, y;
   task snap; input [8*40-1:0] name;
@@ -58,41 +62,39 @@ module tb_fx;
     grid[(4*8+4)*5 +: 5] = 16; grid[(5*8+4)*5 +: 5] = 10; grid[(6*8+3)*5 +: 5] = 16; grid[(7*8+3)*5 +: 5] = 6;
     repeat (5) @(posedge clk); rst = 0;
 
-    // DRAW: brush outline (5x5) around the cursor
+    // ---------------- SENDER (mouse board) ----------------
     state = 0; frames(2); snap("frames/01_draw_brush.ppm");
-    // WAIT: spinner
-    state = 1; frames(5); snap("frames/02_wait_spin_a.ppm"); frames(6); snap("frames/03_wait_spin_b.ppm");
-    // RESULT: preview + digit drop
-    state = 2; frames(1); snap("frames/04_result_drop_early.ppm"); frames(8); snap("frames/05_result_drop_mid.ppm");
-    frames(40); snap("frames/06_result_settled.ppm");
-    // RX screen, nothing received yet: rain
-    state = 4; rx_n = 0; frames(45); snap("frames/07_rx_rain.ppm"); frames(10); snap("frames/08_rx_rain_b.ppm");
-    // message arrives (digits only now): style 0 = ciphertext -> particles -> message
-    rx_log = "6538291475903142"; rx_n = 16;
-    style = 0; pulse_rx;
-    frames(4);  snap("frames/09_cipher_flicker.ppm");
-    frames(14); snap("frames/10_cipher_shown.ppm");
-    frames(10); snap("frames/11_cipher_burst.ppm");
-    frames(10); snap("frames/12_cipher_scattered.ppm");
-    frames(20); snap("frames/13_assemble_t06.ppm");
-    frames(10); snap("frames/14_assemble_t16.ppm");
-    frames(12); snap("frames/15_assemble_t28.ppm");
-    frames(70); snap("frames/16_reveal_done.ppm");
-    // style 1 = scramble-then-lock (replay)
-    style = 1; pulse_replay;
-    frames(30); snap("frames/17_scramble_t30.ppm");
-    // sender (keyboard board COMPOSE screen): delivery fireworks
-    // press send: encrypt rain, delivered during it, fireworks after it
-    state = 5; role_kb = 1; msg = "4321"; msg_len = 4; frames(45);
-    @(negedge clk) enc_go = 1; @(negedge clk) enc_go = 0; link_busy = 1;
-    frames(20); snap("frames/18_encrypt_rain.ppm");
-    link_busy = 0; @(negedge clk) link_ok = 1;
-    frames(40); snap("frames/19_encrypt_rain_b.ppm");
-    frames(40); snap("frames/20_fireworks_t10.ppm");
-    frames(20); snap("frames/21_fireworks_t30.ppm");
-    // slide-in: go to the RX screen
-    link_ok = 0; state = 4; frames(3); snap("frames/22_slide_t03.ppm"); frames(6); snap("frames/23_slide_t09.ppm");
-    // effects off: plain UI
+    state = 2; frames(8); snap("frames/02_result_drop.ppm"); frames(40); snap("frames/03_result_settled.ppm");
+    state = 3; msg = "1284"; msg_len = 4; frames(45); snap("frames/04_msg_before_send.ppm");
+    @(negedge clk) enc_go = 1; @(negedge clk) enc_go = 0; link_busy = 1;           // btnC
+    frames(20); snap("frames/05_send_rain.ppm");
+    link_busy = 0; @(negedge clk) link_ok = 1;                                       // delivered
+    cipher_hex = 64'hA3F_0C7_E19_4B2_6; show_cipher = 1;                              // real ct shown
+    frames(40); snap("frames/06_send_rain_ends.ppm");
+    frames(40); snap("frames/07_fireworks_over_cipher.ppm");
+    frames(60); snap("frames/08_sender_cipher_view.ppm");
+    show_cipher = 0; frames(2); snap("frames/09_sender_btnR_plain.ppm");            // btnR
+
+    // ---------------- RECEIVER (sw12 up) ----------------
+    link_ok = 0; state = 4; rx_n = 0; frames(45); snap("frames/10_rx_empty_no_rain.ppm");
+    cipher_hex = 64'hA3F_0C7_E19_4B2_6; show_cipher = 1;                              // ciphertext arrived
+    frames(4); snap("frames/11_rx_cipher_arrived.ppm");
+    style = 0;
+    @(negedge clk) dec_go = 1; @(negedge clk) dec_go = 0;                            // btnC: decrypt
+    show_cipher = 0; rx_log = "1284"; rx_n = 4;                                      // plaintext released
+    frames(20); snap("frames/12_decrypt_cipher.ppm");
+    frames(12); snap("frames/13_decrypt_burst.ppm");
+    frames(20); snap("frames/14_decrypt_scattered.ppm");
+    frames(20); snap("frames/15_decrypt_assemble.ppm");
+    frames(20); snap("frames/16_decrypt_assemble_b.ppm");
+    frames(40); snap("frames/17_decrypted_fireworks.ppm");
+    frames(20); snap("frames/18_decrypted_fireworks_b.ppm");
+    frames(60); snap("frames/19_decrypted_plain.ppm");
+    style = 1; pulse_replay; frames(20); snap("frames/20_replay_scramble.ppm");      // btnU
+    frames(60);
+    show_cipher = 1; rx_n = 0; frames(2); snap("frames/21_rx_btnR_cipher.ppm");     // btnR
+    en = 0; frames(2); snap("frames/22_fx_off_cipher_still.ppm");
+    en = 1; show_cipher = 0; rx_n = 4; state = 3; frames(3); snap("frames/23_slide.ppm");
     en = 0; state = 2; frames(2); snap("frames/24_fx_off_result.ppm");
     $display("done at %0t", $time);
     $finish;

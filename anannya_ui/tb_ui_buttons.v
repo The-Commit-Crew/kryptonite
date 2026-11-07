@@ -24,7 +24,7 @@ module tb_ui_buttons;
     integer combined;
 
     ui_buttons #(.REPEAT_DIV(4), .FLASH_DIV(3)) dut (
-        .clk(clk), .rst(rst), .role_kb(role_kb), .debug_en(debug_en), .state(state),
+        .clk(clk), .rst(rst), .role_kb(role_kb), .debug_en(debug_en), .state(state), .rx_role(1'b0), .tx_ct_view(1'b0),
         .mouse_x(mouse_x), .mouse_y(mouse_y), .mouse_left(mouse_left), .mouse_right(mouse_right),
         .btn_u_level(btn_u_level), .btn_c_level(btn_c_level), .btn_l_level(btn_l_level),
         .btn_r_level(btn_r_level), .btn_d_level(btn_d_level), .px(px), .py(py),
