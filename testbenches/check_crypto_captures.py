@@ -57,7 +57,7 @@ def main():
                read_capture(args.run_dir / "live_ciphertext.mem"))
         print("PASS: live encryption RTL matches Python and decrypts to the original message")
     if "tb_board1_top_live" in args.tests:
-        messages = ["379", "15", "2", "2026379", "0123456789012345"]
+        messages = ["379", "15", "2", "Ee2026A", "0123456789012345"]
         for number, text in enumerate(messages, 1):
             paths = list(args.run_dir.glob(f"top_0_{number}_*.mem"))
             assert len(paths) == 1, f"Expected one capture for live Board 1 message {number}"

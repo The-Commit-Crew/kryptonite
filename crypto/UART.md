@@ -96,7 +96,7 @@ and writes logs under the ignored `.crypto.sim` directory. It checks ten
 polynomial products against the schoolbook reference (including negacyclic
 wraparound, dense/random inputs, busy protection and reset recovery), fixed and
 live encryption, the existing NTT decryption regression, and Board 1 UI/UART
-retries with the hardware multiplier. Keyboard tests follow the digits-only UI.
+retries with the hardware multiplier. Keyboard tests cover letters and digits.
 Python also compares live-noise ciphertext with the reference and decrypts it
 using the existing local `crypto/keys/board2` key set. No keys are regenerated.
 

@@ -241,13 +241,12 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
         repeat (5) @(negedge clk);
         sw[15] = 0;
         repeat (5) @(negedge clk);
-        type_message("2026379");
-        expected_text = "2026379";
-        keypress("A");
+        expected_text = "Ee2026A";
+        type_message(expected_text);
         keypress(" ");
         keypress("!");
-        if (dut.ed_len != 7)
-            $fatal(1, "Digits-only editor accepted a non-digit");
+        if (dut.ed_len != expected_text.len())
+            $fatal(1, "Keyboard editor accepted space or punctuation");
         packets = 0;
         keypress(8'h0D);
         type_message("9876");
@@ -255,7 +254,7 @@ module tb_board1_top #(parameter FIXED_NOISE = 1, parameter SIM_MULTIPLIER = 0);
         expect_success();
         if (multiplies != 30)
             $fatal(1, "A keyboard Send was accepted while busy");
-        $display("PASS: keyboard Enter encrypted ASCII digits and preserved the busy snapshot");
+        $display("PASS: keyboard Enter encrypted mixed-case letters and digits and preserved the busy snapshot");
 
         type_message("0123456789012345");
         expected_text = "0123456789012345";
